@@ -1,5 +1,7 @@
 # tww_setupfinder
 
+![](docs/screenshot.png)
+
 A desktop app that finds movement setups for The Legend of Zelda: The Wind Waker. You choose a
 room, where Link starts and where he needs to be, and it searches for inputs that get him there.
 Every setup it returns is checked frame by frame against the game's own physics.
