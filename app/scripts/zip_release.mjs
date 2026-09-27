@@ -1,11 +1,13 @@
 /* Zips the app and the core binary side by side, where `core.rs` looks first.
  * The mac and Linux branches are untested. */
 import {execFileSync} from 'node:child_process';
-import {existsSync, mkdirSync, rmSync} from 'node:fs';
+import {existsSync, mkdirSync, readFileSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
 
 const PRODUCT = 'Setup Finder';
 const root = join(import.meta.dirname, '..');
+// tauri.conf.json holds the version; package.json and Cargo.toml match it.
+const {version} = JSON.parse(readFileSync(join(root, 'src-tauri', 'tauri.conf.json'), 'utf8'));
 const built = join(root, 'src-tauri', 'target', 'release');
 const out = join(root, 'release');
 
@@ -31,7 +33,7 @@ if (missing.length) {
 }
 
 mkdirSync(out, {recursive: true});
-const name = `setup-finder-${process.platform}-${process.arch}.zip`;
+const name = `setup-finder-${version}-${process.platform}-${process.arch}.zip`;
 const zip = join(out, name);
 rmSync(zip, {force: true});
 
