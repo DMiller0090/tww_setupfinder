@@ -1,0 +1,7 @@
+# Nothing in this repo gets its line endings rewritten on checkout.
+#
+# The room fixtures under spike/public/rooms/ are raw little-endian float32 - a checkout that
+# rewrote a 0x0A byte inside a coordinate would corrupt the geometry silently, and this machine has
+# core.autocrlf=true. The same applies to the source: a spike is measured, and a diff that is all
+# line endings hides the change that moved the number.
+* -text

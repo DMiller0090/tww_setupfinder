@@ -1,0 +1,3 @@
+tww_setupfinder includes tww_engine, which contains C++ code derived from the
+zeldaret/tww decompilation of The Legend of Zelda: The Wind Waker
+(https://github.com/zeldaret/tww), released under CC0 1.0.
