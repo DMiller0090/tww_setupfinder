@@ -4,15 +4,12 @@
 
 A desktop app that finds movement setups for The Legend of Zelda: The Wind Waker. You choose a
 room, where Link starts and where he needs to be, and it searches for inputs that get him there.
-Every setup it returns is checked frame by frame against the game's own physics.
+Every setup it returns verified against the game's physics.
 
 ## What you need
 
-- **A Japanese Wind Waker disc image (GZLJ01).** You can't search without it: Link's model and
-  animations come from it, and so do the rooms unless a running game supplies one. Nothing from
-  the game ships with this app.
-- **Dolphin**, if you want to read the room and Link's position from a running game. It is
-  optional.
+- **A Japanese Wind Waker disc image (GZLJ01).**
+- **Dolphin**, for updating setup data directly from the emulator (Optional)
 
 ## Reading a running game
 
