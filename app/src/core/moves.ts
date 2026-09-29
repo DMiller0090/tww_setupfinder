@@ -1,6 +1,7 @@
 /* The move catalogue. Frames are from a standstill on flat ground and match the engine, except the
- * slashes and combos (`changeCutProc` is recorded, not run) and the hand-set C up turn. The ids
- * match `core/src/search/catalogue.*`. `stands` is how many moves a row stands for. */
+ * slashes and combos (`changeCutProc` is recorded, not run), the hand-set C up turn, and the rows
+ * the core prices per facing, which show a median. The ids match `core/src/search/catalogue.*`.
+ * `stands` is how many moves a row stands for. */
 export type Sword = 'away' | 'out' | 'any';
 
 export interface Move {
@@ -11,9 +12,10 @@ export interface Move {
   stands: number;
   presses?: number;
   on: boolean;
-  /** Priced by the core per facing; `frames` is then the table's median, which
-   *  `core/tests/test_search.cpp` reads from this file. */
+  /** Priced by the core per facing, and the price cannot be edited. */
   fixed?: boolean;
+  /** Drawn under its own heading, placed where its first row sorts. */
+  under?: 'cup' | 'ess';
 }
 
 export interface MoveType {k: string; n: string; on: boolean}
@@ -73,11 +75,14 @@ export const MOVES: Record<string, Move[]> = (() => {
     {id:'crawl_r', name:'Crawl R', frames:40, sword:'away' as const, stands:1, on:true}
   ];
   out['turns'] = [
-    {id:'fine_turn', name:'C Up Turn', frames:46, sword:'any' as const, stands:200, on:true},
-    {id:'cup_cdown_turnaround', name:'C Up C Down Turnaround', frames:19, sword:'any' as const, stands:1, on:true, fixed:true},
-    {id:'cup_b_settle_turnaround', name:'C Up B Settle Turnaround', frames:21, sword:'any' as const, stands:1, on:true, fixed:true},
-    {id:'cup_b_early_turnaround', name:'C Up B Early Turnaround', frames:19, sword:'any' as const, stands:1, on:true, fixed:true},
-    {id:'l_cdown_turnaround', name:'L + C Down Turnaround', frames:24, sword:'any' as const, stands:1, on:true, fixed:true}
+    {id:'fine_turn', name:'C Up Turn', frames:46, sword:'any' as const, stands:200, on:true, under:'cup'},
+    {id:'cup_cdown_turnaround', name:'C Up C Down Turnaround', frames:19, sword:'any' as const, stands:1, on:true, fixed:true, under:'cup'},
+    {id:'cup_b_settle_turnaround', name:'C Up B Settle Turnaround', frames:21, sword:'any' as const, stands:1, on:true, fixed:true, under:'cup'},
+    {id:'cup_b_early_turnaround', name:'C Up B Early Turnaround', frames:19, sword:'any' as const, stands:1, on:true, fixed:true, under:'cup'},
+    {id:'l_cdown_turnaround', name:'L + C Down Turnaround', frames:24, sword:'any' as const, stands:1, on:true, fixed:true, under:'cup'},
+    {id:'ess_up_turn', name:'ESS Up Turn', frames:14, sword:'any' as const, stands:1, on:true, under:'ess'},
+    {id:'ess_left_turn', name:'ESS Left Turn', frames:99, sword:'any' as const, stands:1, on:true, under:'ess'},
+    {id:'ess_right_turn', name:'ESS Right Turn', frames:99, sword:'any' as const, stands:1, on:true, under:'ess'}
   ];
   Object.keys(COMBOS).forEach(k => {
     out[k] = COMBOS[k].split(' ').map(s => {

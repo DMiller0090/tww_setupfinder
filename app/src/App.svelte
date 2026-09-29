@@ -403,6 +403,7 @@
       /* 4 is the core's own default. */
       checkRange: Number.isFinite(settings.checkRange) && settings.checkRange >= 0
                     ? settings.checkRange : 4,
+      cameraChecks: settings.cameraChecks,
       bounds: {
         xmin: sideOf('xmin'), xmax: sideOf('xmax'),
         zmin: sideOf('zmin'), zmax: sideOf('zmax'),

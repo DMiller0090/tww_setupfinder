@@ -735,8 +735,11 @@ void search_run(const Out& out, const Json& request) {
      camera, and regardless of the collision setting. */
   const std::string camera_cache = search::cam_cache_path(settings::cache_dir(), dzb);
   bool camera_moves = false;
-  for (const std::string& id : q.moves) {
-    camera_moves = camera_moves || search::runs_camera(search::seat_of(id));
+  /* Off by default: with it off, no camera move is refused for the room. */
+  if (request.at("cameraChecks").as_bool(false)) {
+    for (const std::string& id : q.moves) {
+      camera_moves = camera_moves || search::runs_camera(search::seat_of(id));
+    }
   }
   search::CamField camera_field;
   if (camera_moves) {

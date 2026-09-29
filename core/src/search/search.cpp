@@ -71,7 +71,6 @@ double ulp32(double magnitude) {
 }
 
 const double kPi = 3.14159265358979323846;
-
 /** One tree node. The walk is depth-first, so a state's path is the stack below it; no parent links. */
 struct Node {
   double x = 0, y = 0, z = 0;

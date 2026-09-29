@@ -123,7 +123,13 @@ Link step_through_engine(const BaseMove& row, const Edge& edge, const tww_engine
       return link;
     }
   }
-  const int* aiming = leaves_the_view(seat) ? &left.camera : camera;
+  /* An ESS turn aims off its own reseat, and adds its frames. */
+  int seated = 0, reseat = 0;
+  if (is_ess(seat) && !ess_reseat(link.facing, cup_dir, &seated, &reseat)) {
+    link.why = row.id + ": cannot be stepped from this state";
+    return link;
+  }
+  const int* aiming = leaves_the_view(seat) ? &left.camera : is_ess(seat) ? &seated : camera;
 
   Move move;
   if (!move_at(row.id, link.facing, aiming, &move)) {
@@ -188,6 +194,11 @@ Link step_through_engine(const BaseMove& row, const Edge& edge, const tww_engine
     link.camera = left.camera;
     link.has_camera = true;
     link.frames += left.frames;
+  }
+  if (is_ess(seat)) {
+    link.camera = seated;
+    link.has_camera = true;
+    link.frames += reseat;
   }
   link.ran = true;
   return link;

@@ -871,29 +871,30 @@ void engine_tests() {
 
 void catalogue_tests() {
   const std::vector<search::Move> all = search::roster(0);
-  ok(all.size() == 971, "the roster is 971 moves - the twenty-one named plus 950 sword combos");
+  ok(all.size() == 974, "the roster is 974 moves - the twenty-four named plus 950 sword combos");
 
   std::set<std::string> ids;
   for (size_t i = 0; i < all.size(); ++i) ids.insert(all[i].id);
   ok(ids.size() == all.size(), "and every id in it is distinct");
 
   /* Must match the window's `moves.ts`, in order. */
-  const char* named[21] = {"jumpslash",       "jumpslash_qs",    "backflip",
+  const char* named[24] = {"jumpslash",       "jumpslash_qs",    "backflip",
                            "backflip_qs",     "sidehop_l",       "sidehop_r",
                            "dry_roll",        "dry_roll_r",
                            "dry_roll_r_free", "target_slash_r",  "target_slash",
                            "target_slash_qs", "neutral_slash_r", "neutral_slash",
                            "crawl",           "crawl_r",
                            "fine_turn",       "cup_cdown_turnaround", "cup_b_settle_turnaround",
-                           "cup_b_early_turnaround", "l_cdown_turnaround"};
+                           "cup_b_early_turnaround", "l_cdown_turnaround",
+                           "ess_up_turn", "ess_left_turn", "ess_right_turn"};
   bool in_order = true;
-  for (int i = 0; i < 21; ++i) {
+  for (int i = 0; i < 24; ++i) {
     if (all[i].id != named[i]) in_order = false;
   }
-  ok(in_order, "and the first twenty-one are moves.ts's own ids, in its own order");
+  ok(in_order, "and the first twenty-four are moves.ts's own ids, in its own order");
 
   int combo = 0, combo_none = 0, combo_rest = 0;
-  for (size_t i = 21; i < all.size(); ++i) {
+  for (size_t i = 24; i < all.size(); ++i) {
     if (all[i].type == "combo") ++combo;
     if (all[i].type == "combo_none") ++combo_none;
     if (all[i].type == "combo_rest") ++combo_rest;
@@ -906,7 +907,7 @@ void catalogue_tests() {
          ids.count("NtN") == 0,
      "and a move that can be spelled locked on every press is kept under that spelling");
   int targeted_four = 0;
-  for (size_t i = 21; i < all.size(); ++i) {
+  for (size_t i = 24; i < all.size(); ++i) {
     if (all[i].type == "combo" && all[i].presses == 4) ++targeted_four;
   }
   ok(targeted_four == 64, "and the targeted group holds 64 four-press combos");
@@ -929,9 +930,9 @@ void catalogue_tests() {
   }
   ok(shapes, "every move is pressed for, priced by hand, or could not be aimed, and never two of "
              "the three");
-  ok(unaimed == 4,
-     "and with no camera to read it against, exactly four rows cannot be aimed - the three ways "
-     "out of the C up view and the held-L chain");
+  ok(unaimed == 7,
+     "and with no camera to read it against, exactly seven rows cannot be aimed - the three ways "
+     "out of the C up view, the held-L chain and the three ESS turns");
 
   search::Move crawl_r;
   ok(search::move_of("crawl_r", 0, &crawl_r), "crawl_r is in the roster");
@@ -4318,6 +4319,171 @@ struct LastFrame : search::Watcher {
   }
 };
 
+void ess_tests() {
+  const char* ids[3] = {"ess_up_turn", "ess_left_turn", "ess_right_turn"};
+  const int offsets[3] = {0x0000, 0x4000, 0xC000};
+
+  ok(search::kEssDistance == 15.0f / 54.0f,
+     "ess: the stick is byte 158, 15 past the dead zone on the 54 range");
+
+  /* The engine turns each one in place onto the camera plus its offset, at the hold's price. */
+  int drove = 0, landed = 0;
+  const int facings[] = {0, 9170, 0x8000, 50001};
+  const int gaps[] = {1, -7, 300, -2048, 2048, 0x3800, -0x4800, 0x7800};
+  for (int s = 0; s < 3; ++s) {
+    for (int f : facings) {
+      for (int g : gaps) {
+        const int target = (f + g) & 0xFFFF;
+        const int camera = (target - offsets[s]) & 0xFFFF;
+        search::Move m;
+        if (!search::move_of(ids[s], f, &m, &camera) || m.unaimed) continue;
+        tww_engine::Init init;
+        init.pos.set(100.0f, 0.0f, -200.0f);
+        init.shape_angle_y = static_cast<s16>(f);
+        init.travel_angle_y = static_cast<s16>(f);
+        init.proc = daPy_lk_c::daPyProc_WAIT_e;
+        const tww_engine::RoomDzb flat = tww_engine::flat_floor_dzb(0.0f);
+        const search::Drive d = search::drive(m, init, &flat);
+        ++drove;
+        if (d.ok && d.rested && d.facing_out == target && d.dx == 0.0 && d.dz == 0.0 &&
+            d.reach == 0.0 && d.frames == search::ess_hold(g) + search::kInputDelay) {
+          ++landed;
+        }
+      }
+    }
+  }
+  ok(drove == 96 && landed == drove,
+     "ess: the engine lands every turn on its target in place at its price, " +
+         std::to_string(landed) + " of " + std::to_string(drove));
+
+  /* The reseat at 9170 with no turn: the C-down exit's table reads 9182. */
+  int seated = 0, reseat = 0;
+  ok(search::ess_reseat(9170, 0, &seated, &reseat) && seated == 9182,
+     "ess: the reseat at 9170 reads the exit table's 9182, read " + std::to_string(seated));
+  search::Pose was, now;
+  was.facing = 9170;
+  was.camera = 30000;
+  was.has_camera = false;
+  ok(search::model_step("ess_up_turn", 0, 1, was, &now) && now.facing == 9182 &&
+         now.camera == 9182 && now.has_camera && now.frames == reseat + search::ess_hold(12) - 1,
+     "ess: model_step reseats, turns up onto the exit's camera and keeps it, with no camera before");
+  ok(search::model_step("ess_left_turn", 0, 1, was, &now) &&
+         now.facing == ((9182 + 0x4000) & 0xFFFF) && now.camera == 9182,
+     "ess: and left onto it plus a quarter");
+  was.facing = 0;
+  ok(search::ess_reseat(0, 0, &seated, nullptr) && seated == 0 &&
+         !search::model_step("ess_up_turn", 0, 1, was, &now),
+     "ess: RED: where the exit lands on the facing, up does not turn");
+  ok(!search::ess_target(search::Seat::EssRight, 9170, true, 9170 + 0x4000, nullptr),
+     "ess: RED: a half turn is a turnaround, not this");
+  ok(!search::runs_camera(search::Seat::EssUp) && !search::runs_camera(search::Seat::EssLeft) &&
+         !search::runs_camera(search::Seat::EssRight),
+     "ess: the room's camera check does not apply to the reseat");
+
+  const search::BaseTable base = search::base_table(false);
+  bool priced = true;
+  for (int s = 0; s < 3; ++s) {
+    const search::BaseMove* row = base.of(ids[s]);
+    if (row == nullptr || !row->driven || row->frames != 1 + search::kInputDelay) priced = false;
+  }
+  ok(priced, "ess: the base table drives all three at a one-frame hold");
+
+  /* The walk reaches it at its price and the engine confirms it. */
+  {
+    int reseat_9170 = 0;
+    search::ess_reseat(9170, 0, nullptr, &reseat_9170);
+    const search::Slab flat = search::slab(0.0, 0.0, 0.0, 8192.0);
+    const search::Corridor wide = search::corridor(0.0, 0.0, 0.0, 0.0, 2000.0);
+    const search::Selection sel = search::select(flat.mesh, wide);
+    search::Limits open;
+    open.slope_normal_y = 0.0;
+    open.height_step = 1e9;
+    open.normal_apart = 1e9;
+    const search::Grid grid = search::build(sel, wide, open);
+    search::Question q;
+    q.start_facing = 9170;
+    /* The reseat needs no camera: at 9170 it reads 9182. */
+    q.has_camera = false;
+    q.target.has_x = false;
+    q.target.has_z = false;
+    q.tolerance = 0.0;
+    q.steps = 1;
+    q.moves.push_back("ess_right_turn");
+    q.end_facing.any = false;
+    q.end_facing.span = 0;
+    q.end_facing.a = (9182 - 0x4000) & 0xFFFF;
+    const int turn = search::ess_hold(12 - 0x4000);
+    const int price = reseat_9170 + turn + search::kInputDelay;
+    q.frames = price;
+    const search::Found run =
+        search::search_tree(q, base, grid, sel, search::Calibration::measured());
+    bool found = false, confirmed = false;
+    for (const search::Candidate& c : run.candidate) {
+      if (c.facing == q.end_facing.a && c.frames == price && c.path.size() == 1) found = true;
+    }
+    const search::Verified said = search::verify(run, q, base, &flat.room);
+    for (const search::Consult& c : said.consult) {
+      if (c.outcome == search::Outcome::Confirmed && c.facing == q.end_facing.a &&
+          c.frames == price) {
+        confirmed = true;
+      }
+    }
+    ok(found && confirmed, "ess: the walk reaches a right turn at " + std::to_string(price) +
+                               " frames and the engine confirms it");
+
+    /* A person's price is the shown median moved; the same turn moves with it. */
+    std::map<std::string, int> retimed;
+    retimed["ess_right_turn"] = search::ess_median(search::Seat::EssRight) + 10;
+    const search::BaseTable shifted = search::priced(base, retimed);
+    q.frames = price + 10;
+    const search::Found later =
+        search::search_tree(q, shifted, grid, sel, search::Calibration::measured());
+    const search::Verified again = search::verify(later, q, shifted, &flat.room);
+    bool moved = false;
+    for (const search::Consult& c : again.consult) {
+      if (c.outcome == search::Outcome::Confirmed && c.frames == price + 10) moved = true;
+    }
+    ok(moved, "ess: ten frames on the typed price are ten on every turn, walk and engine alike");
+    /* Far under the median, a turn still costs its own hold: the floor is the row's one frame. */
+    retimed["ess_right_turn"] = 1;
+    const search::BaseTable floored = search::priced(base, retimed);
+    const int least = reseat_9170 + turn;
+    q.frames = least;
+    const search::Found cheap =
+        search::search_tree(q, floored, grid, sel, search::Calibration::measured());
+    const search::Verified held = search::verify(cheap, q, floored, &flat.room);
+    bool at_hold = false;
+    for (const search::Consult& c : held.consult) {
+      if (c.outcome == search::Outcome::Confirmed && c.frames == least) at_hold = true;
+    }
+    ok(at_hold, "ess: RED: a price of 1 still costs the turn its reseat and hold, " +
+                    std::to_string(least) + " frames, walk and engine alike");
+  }
+
+  /* `moves.ts` shows each at `ess_median`. */
+  {
+    std::string app = __FILE__;
+    app = app.substr(0, app.find_last_of("/\\")) + "/../../app/src/core/moves.ts";
+    std::string text;
+    if (FILE* f = std::fopen(app.c_str(), "rb")) {
+      char buf[4096];
+      size_t n = 0;
+      while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) text.append(buf, n);
+      std::fclose(f);
+    }
+    bool shown = true;
+    const search::Seat seats[3] = {search::Seat::EssUp, search::Seat::EssLeft,
+                                   search::Seat::EssRight};
+    for (int s = 0; s < 3; ++s) {
+      const int median = search::ess_median(seats[s]);
+      const size_t at = text.find(std::string("{id:'") + ids[s] + "'");
+      const size_t fr = at == std::string::npos ? at : text.find("frames:", at);
+      if (fr == std::string::npos || std::atoi(text.c_str() + fr + 7) != median) shown = false;
+    }
+    ok(shown, "ess: moves.ts shows each turn at its median price");
+  }
+}
+
 void seed_push_tests() {
   /* A wall at z 20, inside Link's wall circle from the origin: the collision pass pushes the seed
      before frame 1. */
@@ -4964,6 +5130,15 @@ int main() {
       return 1;
     }
   }
+  /* `SETUPCORE_ONLY=ess` runs the roster and ESS checks alone; the whole suite takes minutes. */
+  if (const char* only = std::getenv("SETUPCORE_ONLY")) {
+    if (std::string(only) == "ess") {
+      catalogue_tests();
+      ess_tests();
+      std::printf("%s\n", failed == 0 ? "all checks passed" : "CHECKS FAILED");
+      return failed == 0 ? 0 : 1;
+    }
+  }
   corridor_tests();
   selection_tests();
   grid_tests();
@@ -4987,6 +5162,7 @@ int main() {
   verify_tests();
   cup_exit_tests();
   l_chain_tests();
+  ess_tests();
   camera_type_tests();
   camera_list_tests();
   cam_clear_tests();

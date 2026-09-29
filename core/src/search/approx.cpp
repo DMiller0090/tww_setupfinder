@@ -207,6 +207,15 @@ BaseTable priced(const BaseTable& measured, const std::map<std::string, int>& co
     BaseMove& row = out.move[i];
     const std::map<std::string, int>::const_iterator it = costs.find(row.id);
     if (it == costs.end() || it->second < 1) continue;
+    /* An ESS price is per gap; a person's price replaces the median `moves.ts` shows and moves
+       every gap by the same amount, down to a frame at the least. */
+    const Seat seat = seat_of(row.id);
+    if (is_ess(seat)) {
+      const int shifted = std::max(1, row.frames + it->second - ess_median(seat));
+      row.surcharge = shifted - row.frames;
+      row.frames = shifted;
+      continue;
+    }
     row.surcharge = it->second - row.frames;
     row.frames = it->second;
   }
@@ -245,8 +254,17 @@ BaseTable base_table(bool combos) {
       continue;
     }
 
+    /* An ESS turn's frames do depend on the aim: it is measured one unit short of its target, the
+       fastest it can be, and `model_step` adds the rest. */
+    Move aimed = m;
+    const Seat seat = seat_of(m.id);
+    if (is_ess(seat)) {
+      const int camera = (1 - ess_offset(seat)) & 0xFFFF;
+      move_of(m.id, 0, &aimed, &camera);
+    }
+
     Trail trail;
-    const Drive d = drive(m, init, &flat, tww_engine::RunOptions(), 96, &trail);
+    const Drive d = drive(aimed, init, &flat, tww_engine::RunOptions(), 96, &trail);
     row.frames = d.frames;
     row.engine_frames = d.engine_frames;
 

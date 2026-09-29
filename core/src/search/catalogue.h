@@ -62,7 +62,7 @@ struct Pose {
 
 /** The model's one rule for the camera, shared by the search and the verification. The C up turn
  *  seats the camera on its end facing; a way out of the view seats it where the tap reads it
- *  (`cup_exit`, `l_chain`); every other move keeps it. False when the move cannot be aimed from
+ *  (`cup_exit`, `l_chain`); every other move keeps it, and an ESS turn turns onto it. False when the move cannot be aimed from
  *  this state. `steps` is the C up turn's run length, else 1. */
 bool model_step(const std::string& id, int turn_per_step, int steps, const Pose& from, Pose* to);
 
@@ -78,7 +78,40 @@ enum class Seat {
   /** L held until the camera is back on the facing, C-down before L is let go, then `Pose::taps`
    *  taps with C-down held, then the turnaround. */
   LHeldCDown,
+  /** The ESS turns: C up, the C-down exit, then C-down and the stick at ESS strength held; the
+   *  facing turns in place onto the exit's camera plus the stick's offset, which does not move. */
+  EssUp,
+  EssLeft,
+  EssRight,
 };
+
+inline bool is_ess(Seat seat) {
+  return seat == Seat::EssUp || seat == Seat::EssLeft || seat == Seat::EssRight;
+}
+
+/** The stick's bearing off the camera. */
+inline int ess_offset(Seat seat) {
+  return seat == Seat::EssLeft ? 0x4000 : seat == Seat::EssRight ? 0xC000 : 0x0000;
+}
+
+/** Stick byte 158, the middle of the band from 146 (the least read) to 170 (the most that gives no
+ *  speed from a standstill: `setSpeedAndAngleNormal` walks only past 0.5). */
+const float kEssDistance = 0.27777779f;
+
+/** Frames the ESS stick must be held to close `gap` (target less facing), stepped as
+ *  `setSpeedAndAngleNormal` does; at least one. */
+int ess_hold(int gap);
+
+/** The price `moves.ts` shows: the median, reseat and lag included, over every facing. */
+int ess_median(Seat seat);
+
+/** The reseat an ESS turn starts with: the C-down exit's csangle at `facing` (`cup_dir` as
+ *  `Pose`) and its fewest frames to the stick. False where the exit table holds no promise. */
+bool ess_reseat(int facing, int cup_dir, int* csangle, int* frames);
+
+/** The ESS turn's target, or false where it would not turn (no camera, already there) or would
+ *  reverse instead (`checkNextMode`'s `> 0x7800` gate sends that to procWaitTurn). */
+bool ess_target(Seat seat, int facing, bool has_camera, int camera, int* target);
 
 inline bool leaves_the_view(Seat seat) {
   return seat == Seat::LeavesByCDown || seat == Seat::LeavesByBSettle ||
@@ -114,6 +147,18 @@ inline bool model_step(Seat seat, int turn_per_step, int steps, const Pose& from
     out.cup_dir = net > 0 ? 1 : net < 0 ? -1 : 0;
   } else if (leaves_the_view(seat)) {
     if (!leave_the_view(seat, from, &out)) return false;
+  } else if (is_ess(seat)) {
+    int seated = 0, reseat = 0, target = 0;
+    if (!ess_reseat(out.facing, from.cup_dir, &seated, &reseat) ||
+        !ess_target(seat, out.facing, true, seated, &target)) {
+      return false;
+    }
+    /* The row is priced at a one-frame hold. */
+    out.frames =
+        reseat + ess_hold(static_cast<int16_t>(static_cast<uint16_t>(target - out.facing))) - 1;
+    out.camera = seated;
+    out.has_camera = true;
+    out.facing = target;
   } else {
     out.facing = ((from.facing + turn_per_step * steps) & 0xFFFF);
   }

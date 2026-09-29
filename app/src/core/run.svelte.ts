@@ -87,6 +87,7 @@ export interface Request {
   bounds: AskedBounds;
   cores: number;
   checkRange: number;
+  cameraChecks: boolean;
 }
 
 /**
@@ -121,6 +122,7 @@ export async function start(q: Request,
                                   moves: q.moves, costs: q.costs, collision: q.collision,
                                   bounds: q.bounds,
                                   cores: q.cores, checkRange: q.checkRange,
+                                  cameraChecks: q.cameraChecks,
                                   aim: q.asked.aim === 'overhead' ? 'overhead' : 'player',
                                   ...q.room})) {
       /* A stopped run is still read to its `done`; breaking out would leave the core walking. */

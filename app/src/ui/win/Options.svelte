@@ -82,6 +82,12 @@
         <input type="number" id="lCr" min="0" step="any"
                bind:value={settings.checkRange} onchange={keepRange}></div>
       <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="f" onpointerenter={tell(t.infoCameraChecks)} onpointerleave={clear}
+           onfocusin={tell(t.infoCameraChecks)} onfocusout={clear}>
+        <span class="check"><input type="checkbox" id="cameraChecks"
+            bind:checked={settings.cameraChecks} onchange={keep}>
+          <label for="cameraChecks">{t.cameraChecks}</label></span></div>
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="f" onpointerenter={tell(t.infoHex)} onpointerleave={clear}
            onfocusin={tell(t.infoHex)} onfocusout={clear}>
         <span class="check"><input type="checkbox" id="hex" bind:checked={settings.hex} onchange={tookHex}>

@@ -2,12 +2,16 @@
 #include "cup_exit.h"
 #include "l_chain.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
 #include <set>
+
+#include "SSystem/SComponent/c_lib.h"
+#include "d/actor/d_a_player_HIO.h"
 
 namespace search {
 namespace {
@@ -182,6 +186,15 @@ std::vector<Press> turnaround(int world) {
   std::vector<Press> out;
   push(out, kTurnHold, 0, false, world, 1.0f);
   push(out, kReleaseTail, 0, false, world, 0.0f);
+  return out;
+}
+
+/** The ESS stick held onto `target` until the facing is on it; C-down, held with it, keeps the
+ *  camera still and is not a player input, so it is not pressed here. */
+std::vector<Press> ess_turn(int facing, int target) {
+  std::vector<Press> out;
+  push(out, ess_hold(static_cast<int16_t>(static_cast<uint16_t>(target - facing))), 0, false,
+       target, kEssDistance);
   return out;
 }
 
@@ -433,7 +446,73 @@ Seat seat_of(const std::string& id) {
   if (id == "cup_b_settle_turnaround") return Seat::LeavesByBSettle;
   if (id == "cup_b_early_turnaround") return Seat::LeavesByBEarly;
   if (id == "l_cdown_turnaround") return Seat::LHeldCDown;
+  if (id == "ess_up_turn") return Seat::EssUp;
+  if (id == "ess_left_turn") return Seat::EssLeft;
+  if (id == "ess_right_turn") return Seat::EssRight;
   return Seat::Kept;
+}
+
+namespace {
+
+/** `setSpeedAndAngleNormal`'s standstill arm stepped to zero: both steps scale with the stick
+ *  squared. */
+int ess_steps(int gap) {
+  const f32 sq = kEssDistance * kEssDistance;
+  s16 most = static_cast<s16>(daPy_HIO_move_c0::m.field_0x0 * sq);
+  if (most < 10) most = 10;
+  s16 least = static_cast<s16>(daPy_HIO_move_c0::m.field_0x4 * sq);
+  if (least < 1) least = 1;
+  s16 angle = 0;
+  const s16 target = static_cast<s16>(gap);
+  int frames = 0;
+  while (angle != target) {
+    cLib_addCalcAngleS(&angle, target, daPy_HIO_move_c0::m.field_0x6, most, least);
+    ++frames;
+  }
+  return frames > 0 ? frames : 1;
+}
+
+}  // namespace
+
+int ess_hold(int gap) {
+  /* Every gap from -0x8000 up, once; the walk asks per generated state. */
+  static const std::vector<int> table = [] {
+    std::vector<int> t(0x10000);
+    for (int g = -0x8000; g < 0x8000; ++g) t[static_cast<size_t>(g + 0x8000)] = ess_steps(g);
+    return t;
+  }();
+  const int g = static_cast<int16_t>(static_cast<uint16_t>(gap));
+  return table[static_cast<size_t>(g + 0x8000)];
+}
+
+bool ess_reseat(int facing, int cup_dir, int* csangle, int* frames) {
+  cup_exit::Leave l;
+  if (!cup_exit::leave(facing & 0xFFFF, cup_dir, cup_exit::Way::CDown, &l)) return false;
+  if (csangle) *csangle = l.csangle & 0xFFFF;
+  if (frames) *frames = l.frames;
+  return true;
+}
+
+int ess_median(Seat seat) {
+  std::vector<int> prices;
+  for (int f = 0; f < 0x10000; ++f) {
+    int seated = 0, reseat = 0, target = 0;
+    if (!ess_reseat(f, 0, &seated, &reseat) || !ess_target(seat, f, true, seated, &target)) continue;
+    prices.push_back(reseat + ess_hold(static_cast<int16_t>(static_cast<uint16_t>(target - f))) +
+                     kInputDelay);
+  }
+  std::sort(prices.begin(), prices.end());
+  return prices.empty() ? 0 : prices[(prices.size() - 1) / 2];
+}
+
+bool ess_target(Seat seat, int facing, bool has_camera, int camera, int* target) {
+  if (!has_camera) return false;
+  const int t = (camera + ess_offset(seat)) & 0xFFFF;
+  int gap = static_cast<int16_t>(static_cast<uint16_t>(t - facing));
+  if (gap < 0) gap = -gap;
+  if (gap == 0 || gap > kTurnReversalGate) return false;
+  if (target) *target = t;
+  return true;
 }
 
 bool leave_the_view(Seat seat, const Pose& from, Pose* to) {
@@ -552,6 +631,26 @@ std::vector<Move> roster(int facing, bool combos, const int* camera) {
   out.back().unaimed = !aimed;
   out.push_back(named("l_cdown_turnaround", "turns", Sword::Any, tap));
   out.back().unaimed = !aimed;
+
+  /* Aimed off the caller's camera like the turnarounds; unaimed with none, or where it would not
+     turn. */
+  auto ess = [&](Seat seat, std::vector<Press>* action) {
+    int target = 0;
+    action->clear();
+    if (camera == 0 || !ess_target(seat, facing, true, *camera, &target)) return false;
+    *action = ess_turn(facing, target);
+    return true;
+  };
+  std::vector<Press> press;
+  bool turns = ess(Seat::EssUp, &press);
+  out.push_back(named("ess_up_turn", "turns", Sword::Any, press));
+  out.back().unaimed = !turns;
+  turns = ess(Seat::EssLeft, &press);
+  out.push_back(named("ess_left_turn", "turns", Sword::Any, press));
+  out.back().unaimed = !turns;
+  turns = ess(Seat::EssRight, &press);
+  out.push_back(named("ess_right_turn", "turns", Sword::Any, press));
+  out.back().unaimed = !turns;
 
   if (!combos) return out;
   const std::vector<Combo>& generated = combos_once();

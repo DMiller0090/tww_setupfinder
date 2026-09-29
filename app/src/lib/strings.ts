@@ -220,6 +220,7 @@ export const t = {
   infoGame: 'Reads collision and the stage list from a game disc',
   infoCores: 'How many threads the search runs on',
   infoHex: 'Shows and takes every facing as hex',
+  infoCameraChecks: 'Prevents certain camera based moves based on the rooms geometry',
   infoKeepMoves: 'Automatically save moves between sessions',
   infoRestore: 'Automatically loads last session',
   infoPlans: 'Keeps found plans on disc between sessions',
@@ -228,6 +229,9 @@ export const t = {
 
   /* Moves */
   showAll: 'Show All',
+  cameraChecks: 'Enable Camera Checks',
+  cupTurns: 'C Up Turns',
+  essTurns: 'ESS Turns',
   noSword: 'No sword',
   swordAway: 'Away',
   swordOut: 'Out',

@@ -23,6 +23,8 @@ export type Question =
      cores: number;
      /* A multiple of the smallest step a position can move by, not a distance. */
      checkRange: number;
+     /* Off, camera moves are never refused for the room. */
+     cameraChecks: boolean;
      moves: string[]; costs: Record<string, number>; collision: 'none' | 'floors' | 'solid';
      bounds: AskedBounds;
      /* The item's offset turns with the final facing, so only the core can apply it. */

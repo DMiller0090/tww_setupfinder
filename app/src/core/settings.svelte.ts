@@ -26,6 +26,8 @@ export const settings = $state({
   cores: 1,
   /** A multiple of the smallest position step, not a distance. Kept outside both switches. */
   checkRange: 4,
+  /** Whether camera moves are refused where the room could block the camera. */
+  cameraChecks: false,
   /** Mirrored into `base.hex` by `tookHex`. */
   hex: false,
   keepMoves: true,
@@ -106,6 +108,7 @@ interface KeptSession {
 interface Kept {
   cores?: number;
   checkRange?: number;
+  cameraChecks?: boolean;
   hex?: boolean;
   keepMoves?: boolean;
   restore?: boolean;
@@ -262,6 +265,7 @@ function body(): Kept {
   const out: Kept = {
     cores: settings.cores,
     checkRange: settings.checkRange,
+    cameraChecks: settings.cameraChecks,
     hex: settings.hex,
     keepMoves: settings.keepMoves,
     restore: settings.restore,
@@ -311,6 +315,7 @@ export async function load(): Promise<void> {
     const kept = (got ?? {}) as Kept;
     settings.cores = aNumber(kept.cores, settings.cores);
     settings.checkRange = aNumber(kept.checkRange, settings.checkRange);
+    settings.cameraChecks = aFlag(kept.cameraChecks, settings.cameraChecks);
     settings.hex = aFlag(kept.hex, settings.hex);
     settings.keepMoves = aFlag(kept.keepMoves, settings.keepMoves);
     settings.restore = aFlag(kept.restore, settings.restore);

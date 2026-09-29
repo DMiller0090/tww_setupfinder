@@ -98,6 +98,19 @@
   }
 
   const typeOn = (x: MoveType): number => weigh(chosen(x));
+
+  const UNDER = {cup: t.cupTurns, ess: t.essTurns} as const;
+  type Part = {m: Move} | {k: keyof typeof UNDER; n: string; rows: Move[]};
+  /** Rows in their order, a heading's rows gathered where the first of them falls. */
+  const parted = (ms: Move[]): Part[] => {
+    const out: Part[] = [];
+    for (const m of ms) {
+      if (!m.under) out.push({m});
+      else if (!out.some(p => 'k' in p && p.k === m.under))
+        out.push({k: m.under, n: UNDER[m.under], rows: ms.filter(x => x.under === m.under)});
+    }
+    return out;
+  };
 </script>
 
 <dialog id="movesWin" class="big" bind:this={win}
@@ -190,14 +203,10 @@
                 {#each groups as g (g.T.k)}
                   <tr class="grp"><td colspan={counted ? 4 : 3}>{g.T.n}
                     <b>{weigh(g.rows).toLocaleString()}</b></td></tr>
-                  {#each g.rows as m (m.id)}
-                    {@render row(m)}
-                  {/each}
+                  {@render part(g.rows)}
                 {/each}
               {:else}
-                {#each rows as m (m.id)}
-                  {@render row(m)}
-                {/each}
+                {@render part(rows)}
               {/if}
             </tbody>
           </table>
@@ -211,6 +220,20 @@
     <button type="button" class="on" onclick={() => open = false}>{t.done}</button>
   </footer>
 </div></dialog>
+
+{#snippet part(ms: Move[])}
+  {#each parted(ms) as p ('k' in p ? p.k : p.m.id)}
+    {#if 'k' in p}
+      <tr class="grp"><td colspan={counted ? 4 : 3}>{p.n}
+        <b>{weigh(p.rows.filter(m => m.on)).toLocaleString()}</b></td></tr>
+      {#each p.rows as m (m.id)}
+        {@render row(m)}
+      {/each}
+    {:else}
+      {@render row(p.m)}
+    {/if}
+  {/each}
+{/snippet}
 
 {#snippet row(m: Move)}
   {@const out = capped(m)}
