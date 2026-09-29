@@ -84,6 +84,11 @@ struct Question {
   int frames = 0;
   /** Move cap, or zero for none. Prunes by depth only; it is not a cost bound. */
   int steps = 0;
+  /** No plan of fewer moves is recorded, driven or kept as closest; shorter states are still
+   *  walked. A shorter state still cuts a costlier one on the same state, so a plan inside the span
+   *  that ends where a shorter one did is not reported. Zero records the
+   *  start itself when it is near. */
+  int fewest = 0;
   std::vector<std::string> moves;
 
   Collision collision = Collision::Solid;

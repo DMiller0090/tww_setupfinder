@@ -78,6 +78,8 @@ export interface Request {
   facing?: {a: number; b: number | null};
   asked: Asked;
   steps: number;
+  /** Plans of fewer moves are not reported; 0 also reports the start itself. */
+  fewest: number;
   frames: number;
   room: {stage: string; room: number; pid?: number; iso?: string};
   moves: string[];
@@ -118,7 +120,7 @@ export async function start(q: Request,
   try {
     for await (const line of ask({ask: 'search', start: q.start, target: q.target,
                                   ...(q.facing ? {facing: q.facing} : {}),
-                                  steps: q.steps, frames: q.frames, tol: q.asked.tol,
+                                  steps: q.steps, fewest: q.fewest, frames: q.frames, tol: q.asked.tol,
                                   moves: q.moves, costs: q.costs, collision: q.collision,
                                   bounds: q.bounds,
                                   cores: q.cores, checkRange: q.checkRange,

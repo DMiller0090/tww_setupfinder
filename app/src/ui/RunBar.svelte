@@ -11,6 +11,18 @@
         logs: () => void; logCount: number;
         go?: () => void; running?: boolean; pct?: number;
         figures?: Array<[string, string, boolean?]>; ended?: 'stopped' | 'empty' | 'done' | 'broke' | null} = $props();
+
+  /* Steps is a count, `4`, or a span, `3-6`: fewest to most. */
+  const spanOf = (text: string): [number, number] | null => {
+    const m = /^(\d+)(?:\s*[-–]\s*(\d+))?$/.exec(text.trim());
+    if (!m) return null;
+    const a = Number(m[1]), b = m[2] === undefined ? a : Number(m[2]);
+    const lo = m[2] === undefined ? 1 : Math.min(a, b), hi = Math.max(a, b);
+    return lo >= 1 && hi >= lo ? [lo, hi] : null;
+  };
+  /* A bad span is marked while typed. The span is taken, and the text tidied or reverted, only
+     when the box is left, so nothing rewrites it under the caret. */
+  let badSteps = $state(false);
 </script>
 
 <div class="runbar">
@@ -49,9 +61,21 @@
         </span>
       </div>
       <div class="grp">
+        <!-- Text, since a number box refuses the dash; the width is the number boxes' own. -->
         <span class="num"><label for="lLen">{t.steps}</label>
-          <input type="number" id="lLen" bind:value={settings.steps} disabled={running}
-                 onchange={keep} title={running ? t.stopToChange : undefined}></span>
+          <input type="text" id="lLen" value={t.stepSpan(settings.fewest, settings.steps)}
+                 disabled={running} style:width="3.25rem"
+                 style:flex="none"
+                 aria-invalid={badSteps}
+                 oninput={e => badSteps = spanOf(e.currentTarget.value) === null}
+                 onchange={e => {
+                   const span = spanOf(e.currentTarget.value);
+                   if (span) [settings.fewest, settings.steps] = span;
+                   e.currentTarget.value = t.stepSpan(settings.fewest, settings.steps);
+                   badSteps = false;
+                   keep();
+                 }}
+                 title={running ? t.stopToChange : undefined}></span>
         <span class="num"><label for="lFr">{t.frames}</label>
           <input type="number" id="lFr" bind:value={settings.frames} disabled={running}
                  onchange={keep} title={running ? t.stopToChange : undefined}></span>

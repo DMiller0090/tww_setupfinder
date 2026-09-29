@@ -42,6 +42,8 @@ export const settings = $state({
   /** Needs something to stand on. */
   actors: false,
   aim: 'player',
+  /** The span of move counts reported, `fewest` to `steps`. */
+  fewest: 1,
   steps: 4,
   frames: 120,
 
@@ -99,6 +101,7 @@ interface KeptSession {
   sword: boolean;
   actors: boolean;
   aim: string;
+  fewest?: number;
   steps: number;
   frames: number;
   lastRoom: string;
@@ -207,7 +210,8 @@ function takeSession(kept: KeptSession): void {
   settings.sword = aFlag(kept.sword, settings.sword);
   settings.actors = aFlag(kept.actors, settings.actors);
   settings.aim = aWord(kept.aim, settings.aim);
-  settings.steps = aNumber(kept.steps, settings.steps);
+  settings.steps = Math.max(1, Math.round(aNumber(kept.steps, settings.steps)));
+  settings.fewest = Math.min(settings.steps, Math.max(1, Math.round(aNumber(kept.fewest, 1))));
   settings.frames = aNumber(kept.frames, settings.frames);
   rooms = kept.rooms && typeof kept.rooms === 'object' ? {...kept.rooms} : {};
   settings.lastRoom = aWord(kept.lastRoom, '');
@@ -256,7 +260,7 @@ function sessionNow(): KeptSession {
   if (settings.lastRoom) all[settings.lastRoom] = questionNow();
   return {
     ground: settings.ground, sword: settings.sword, actors: settings.actors, aim: settings.aim,
-    steps: settings.steps, frames: settings.frames,
+    fewest: settings.fewest, steps: settings.steps, frames: settings.frames,
     lastRoom: settings.lastRoom, rooms: all,
   };
 }

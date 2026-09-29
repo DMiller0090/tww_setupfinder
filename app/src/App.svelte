@@ -392,7 +392,9 @@
       /* Absent means any facing. */
       ...(marks.facing ? {facing: marks.facing} : {}),
       asked: {box, tol: Math.max(0, n(settings.tol) ?? 0), aim: settings.aim},
-      steps: Math.max(0, settings.steps), frames: Math.max(0, settings.frames),
+      /* A span from 1 also reports the start, which is a plan of no moves. */
+      steps: Math.max(1, settings.steps), fewest: settings.fewest > 1 ? settings.fewest : 0,
+      frames: Math.max(0, settings.frames),
       room: {stage: picked?.stage ?? '', room: picked?.room ?? 0,
              ...(disc ? {iso: disc} : {}), ...(live.at ? {pid: live.at.pid} : {})},
       moves: TYPES.flatMap(T => chosen(T).map(m => m.id)),

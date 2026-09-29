@@ -18,7 +18,7 @@ export type Question =
      against and what the search quantises by. */
   | {ask: 'search'; start: {x: number; y?: number; z: number; f: number; cam?: number};
      target: AskedTarget; facing?: {a: number; b: number | null};
-     steps: number; frames: number; tol: number;
+     steps: number; fewest: number; frames: number; tol: number;
      /* Changes how long a run takes, never what comes back. */
      cores: number;
      /* A multiple of the smallest step a position can move by, not a distance. */

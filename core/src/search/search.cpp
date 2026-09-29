@@ -782,7 +782,8 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     }
   }
 
-  /* Without a Steps cap, the most moves the frame budget can pay at the cheapest price. */
+  /* Without a Steps cap, the most moves the frame budget can pay at the cheapest price. The app
+     never asks for one; the tests do. */
   const int kDeepest = 64;
   int deepest = question.steps;
   if (deepest <= 0) {
@@ -902,7 +903,8 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     const size_t n = one.trail.path.size();
     const int shift = tie.frames.back() - one.trail.frames[s];
     if (one.end.frames + shift > question.frames) return false;
-    if (static_cast<int>(tie.path.size() + (n - 1 - s)) > deepest) return false;
+    const int length = static_cast<int>(tie.path.size() + (n - 1 - s));
+    if (length > deepest || length < question.fewest) return false;
     twin->trail = tie;
     double consult = tie.consult.back();
     double allowance = tie.allowance.back();
@@ -1289,8 +1291,11 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
          `Closest::worse` can still prefer an equally distant state. */
       bool by_allowance = false;
       const bool near = Near::is(question, child, child.distance, &by_allowance);
+      /* Too short to record, but still listed below: a tie can splice it into a longer plan. */
+      const bool short_of = child.depth < question.fewest;
       const bool could_be_closest =
-          !near && (closest.kept.size() < kKeep || child.distance <= closest.kept.front().distance);
+          !near && !short_of &&
+          (closest.kept.size() < kKeep || child.distance <= closest.kept.front().distance);
       if (near || could_be_closest) {
         Candidate c;
         c.x = child.x;
@@ -1310,7 +1315,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
         }
 
         if (near) {
-          if (by_allowance) ++out->count.allowed;
+          if (by_allowance && !short_of) ++out->count.allowed;
           /* Its states, for splicing ties onto (see `expand`). */
           if (out->listed.size() < cap) {
             Listed one;
@@ -1318,8 +1323,8 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
             one.end = c;
             list(out, one);
           }
-          if (drove != nullptr) (*drove)(c);
-          if (given_away) {
+          if (drove != nullptr && !short_of) (*drove)(c);
+          if (given_away || short_of) {
           } else if (out->raw.size() < cap) {
             out->raw.push_back(c);
           } else {
@@ -1413,7 +1418,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
                                                   : question.target.distance(ax, az);
       }
       bool by_allowance = false;
-      if (Near::is(question, start, here.distance, &by_allowance)) {
+      if (question.fewest == 0 && Near::is(question, start, here.distance, &by_allowance)) {
         if (by_allowance) ++prefix.count.allowed;
         if (handing != nullptr) (*handing)(here);
         prefix.raw.push_back(here);

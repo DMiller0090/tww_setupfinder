@@ -2504,6 +2504,57 @@ void travel_tests() {
      "RED: and somewhere one ends past its level reach");
 }
 
+/* Fewest: no plan shorter than it is recorded or kept as closest, and longer ones still are. */
+void fewest_tests() {
+  const search::BaseTable base = search::base_table(false);
+  const search::Calibration stored = search::Calibration::measured();
+  const double at = 1000.0;
+  const search::Slab ground = search::slab(0.0, 0.0, 0.0, 8192.0);
+  const search::Corridor wide = search::corridor(at, at, at, at, 3000.0);
+  const search::Selection sel = search::select(ground.mesh, wide);
+  search::Limits open;
+  open.slope_normal_y = 0.0;
+  open.height_step = 1e9;
+  open.normal_apart = 1e9;
+  const search::Grid grid = search::build(sel, wide, open);
+
+  search::Question q;
+  q.start_x = at;
+  q.start_z = at;
+  q.start_y = ground.at(at, at);
+  q.target.x = at + 200.0;
+  q.target.z = at + 180.0;
+  q.tolerance = 400.0;
+  q.frames = 100000;
+  q.steps = 3;
+  q.moves.push_back("dry_roll");
+  q.moves.push_back("crawl");
+  q.moves.push_back("fine_turn");
+
+  auto shortest = [](const search::Found& f) {
+    size_t n = 1000;
+    for (const search::Candidate& c : f.candidate) n = std::min(n, c.path.size());
+    for (const search::Candidate& c : f.closest) n = std::min(n, c.path.size());
+    return n;
+  };
+  const search::Found all = search::search_tree(q, base, grid, sel, stored);
+  q.fewest = 3;
+  const search::Found three = search::search_tree(q, base, grid, sel, stored);
+  std::printf("     fewest 3: %zu candidates against %zu, shortest %zu against %zu\n",
+              three.candidate.size(), all.candidate.size(), shortest(three), shortest(all));
+  ok(shortest(all) < 3, "without fewest, plans shorter than three are recorded");
+  ok(!three.candidate.empty(), "with fewest 3, three-step plans are still recorded");
+  ok(shortest(three) == 3, "RED: and none shorter than three is recorded or kept as closest");
+  /* Shorter states are still walked, so every longer plan the unfiltered run finds is found. */
+  std::set<std::vector<search::Edge> > kept;
+  for (const search::Candidate& c : three.candidate) kept.insert(c.path);
+  size_t lost = 0;
+  for (const search::Candidate& c : all.candidate) {
+    if (c.path.size() >= 3 && kept.count(c.path) == 0) ++lost;
+  }
+  ok(lost == 0, "RED: every plan of three or more the unfiltered run records is recorded");
+}
+
 /* A run with the steps bound drives every order a run without it does, and no closest is farther. */
 void steps_bound_tests() {
   /* 100 away, one roll of 90 left: no nearer than 10, inside the 5 + 10 its last step can earn. */
@@ -5212,8 +5263,14 @@ int main() {
       return 1;
     }
   }
-  /* `SETUPCORE_ONLY=ess` runs the roster, ESS and exit checks alone; the whole suite takes minutes. */
+  /* `SETUPCORE_ONLY=ess` runs the roster, ESS and exit checks alone, and `fewest` the fewest
+     checks; the whole suite takes minutes. */
   if (const char* only = std::getenv("SETUPCORE_ONLY")) {
+    if (std::string(only) == "fewest") {
+      fewest_tests();
+      std::printf("%s\n", failed == 0 ? "all checks passed" : "CHECKS FAILED");
+      return failed == 0 ? 0 : 1;
+    }
     if (std::string(only) == "ess") {
       catalogue_tests();
       ess_tests();
@@ -5242,6 +5299,7 @@ int main() {
   search_tests();
   travel_tests();
   steps_bound_tests();
+  fewest_tests();
   verify_tests();
   cup_exit_tests();
   exits_at_tests();

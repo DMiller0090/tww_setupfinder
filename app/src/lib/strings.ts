@@ -139,6 +139,9 @@ export const t = {
   needsFloors: 'Needs floors',
   needsWalls: 'Needs walls',
   steps: 'Steps',
+  /** The Steps box's own text: a count alone when the span starts at 1. */
+  stepSpan: (fewest: number, steps: number): string =>
+    fewest === 1 ? `${steps}` : `${fewest}-${steps}`,
   frames: 'Frames',
   notStarted: 'Not started',
   logs: 'Logs',
