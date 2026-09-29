@@ -653,8 +653,7 @@ std::vector<Edge> canonical(const std::vector<Edge>& path) {
 
 /* Depth-first so memory is O(depth); children nearest-first so early results are good. The order
    never changes what a finished run returns. */
-/** Halfway from the start to the target's middle; a freed axis stays at the start. */
-static cup_tape::Spot camera_spot(const Question& q) {
+cup_tape::Spot camera_spot(const Question& q) {
   const Target& t = q.target;
   const double tx = !t.has_x ? q.start_x : t.ranged ? 0.5 * (t.x0 + t.x1) : t.x;
   const double tz = !t.has_z ? q.start_z : t.ranged ? 0.5 * (t.z0 + t.z1) : t.z;

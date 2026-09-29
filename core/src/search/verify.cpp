@@ -68,7 +68,8 @@ struct Link {
 
 Link step_through_engine(const BaseMove& row, const Edge& edge, const tww_engine::RoomDzb* room,
                          double x, double y, double z, int facing, int angle_x, int angle_z,
-                         const int* camera = 0, int cup_dir = 0) {
+                         const int* camera = 0, int cup_dir = 0,
+                         const cup_tape::Spot* camera_at = nullptr) {
   /* Start from the f32 the engine is seeded with, so `start + net` is exact. */
   x = static_cast<double>(static_cast<f32>(x));
   y = static_cast<double>(static_cast<f32>(y));
@@ -108,10 +109,11 @@ Link step_through_engine(const BaseMove& row, const Edge& edge, const tww_engine
   }
 
   /* The roster is told the camera for aiming, and the drive runs none. A way out of the view and an
-     ESS reseat read theirs off the engine's camera where Link stands; far from the origin the
-     game's floats round it off the tables, which were measured at the origin. */
+     ESS reseat read theirs off the engine's camera at `camera_at`, the search's spot, or where Link
+     stands; far from the origin the game's floats round it off the tables. */
   const Seat seat = seat_of(row.id);
-  const cup_tape::Spot spot = {static_cast<f32>(x), static_cast<f32>(y), static_cast<f32>(z)};
+  const cup_tape::Spot here = {static_cast<f32>(x), static_cast<f32>(y), static_cast<f32>(z)};
+  const cup_tape::Spot spot = camera_at ? *camera_at : here;
   Pose left;
   if (leaves_the_view(seat)) {
     Pose was;
@@ -216,12 +218,14 @@ struct DriveKey {
   int facing, angle_x, angle_z;
   bool has_camera;
   int camera, cup_dir;
+  uint32_t cx, cy, cz;
 
   bool operator==(const DriveKey& o) const {
     return x == o.x && y == o.y && z == o.z && facing == o.facing && id == o.id &&
            frames == o.frames && surcharge == o.surcharge && turn == o.turn && steps == o.steps &&
            taps == o.taps && angle_x == o.angle_x && angle_z == o.angle_z &&
-           has_camera == o.has_camera && camera == o.camera && cup_dir == o.cup_dir;
+           has_camera == o.has_camera && camera == o.camera && cup_dir == o.cup_dir &&
+           cx == o.cx && cy == o.cy && cz == o.cz;
   }
 };
 
@@ -230,7 +234,8 @@ struct DriveKeyHash {
     size_t h = std::hash<std::string>()(k.id);
     const int64_t part[] = {k.frames, k.surcharge, k.turn,    k.steps,   k.taps,
                             k.x,      k.y,         k.z,       k.facing,  k.angle_x,
-                            k.angle_z, k.has_camera, k.camera, k.cup_dir};
+                            k.angle_z, k.has_camera, k.camera, k.cup_dir,
+                            k.cx,      k.cy,         k.cz};
     for (size_t i = 0; i < sizeof part / sizeof part[0]; ++i) {
       h ^= std::hash<int64_t>()(part[i]) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
     }
@@ -267,10 +272,10 @@ void remember_in(const tww_engine::RoomDzb* room) {
 
 Link step_remembered(const BaseMove& row, const Edge& edge, const tww_engine::RoomDzb* room,
                      double x, double y, double z, int facing, int angle_x, int angle_z,
-                     const int* camera, int cup_dir) {
+                     const int* camera, int cup_dir, const cup_tape::Spot& camera_at) {
   if (!drives.on || room == nullptr) {
     return step_through_engine(row, edge, room, x, y, z, facing, angle_x, angle_z, camera,
-                               cup_dir);
+                               cup_dir, &camera_at);
   }
   if (!drives.have || drives.held.size() >= kDrivesHeld) {
     drives.held.clear();
@@ -292,6 +297,9 @@ Link step_remembered(const BaseMove& row, const Edge& edge, const tww_engine::Ro
   key.has_camera = camera != 0;
   key.camera = camera ? (*camera & 0xFFFF) : 0;
   key.cup_dir = cup_dir;
+  key.cx = f32_bits(camera_at.x);
+  key.cy = f32_bits(camera_at.y);
+  key.cz = f32_bits(camera_at.z);
   const std::unordered_map<DriveKey, Link, DriveKeyHash>::const_iterator at = drives.held.find(key);
   if (at != drives.held.end()) {
     ++drives.count.hits;
@@ -299,7 +307,8 @@ Link step_remembered(const BaseMove& row, const Edge& edge, const tww_engine::Ro
   }
   ++drives.count.misses;
   const Link link =
-      step_through_engine(row, edge, room, x, y, z, facing, angle_x, angle_z, camera, cup_dir);
+      step_through_engine(row, edge, room, x, y, z, facing, angle_x, angle_z, camera, cup_dir,
+                          &camera_at);
   drives.held.emplace(key, link);
   return link;
 }
@@ -307,6 +316,7 @@ Link step_remembered(const BaseMove& row, const Edge& edge, const tww_engine::Ro
 Consult consult_path(const std::vector<Edge>& path, const Question& question,
                      const BaseTable& base, const tww_engine::RoomDzb* room) {
   remember_in(room);
+  const cup_tape::Spot camera_at = camera_spot(question);
   Consult out;
   out.path = path;
   /* Start at the f32 Link can be at, not the typed double, so `start + net` stays exact. */
@@ -329,7 +339,7 @@ Consult consult_path(const std::vector<Edge>& path, const Question& question,
     }
     const int* carried = has_camera ? &camera : 0;
     const Link link = step_remembered(base.move[at], path[i], room, x, y, z, facing, angle_x,
-                                      angle_z, carried, cup_dir);
+                                      angle_z, carried, cup_dir, camera_at);
     out.engine_frames += link.engine_frames;
     if (!link.ran) {
       out.why = link.why;

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "approx.h"
+#include "cup_tape.h"
 #include "cam_clear.h"
 #include "grid.h"
 #include "target.h"
@@ -259,6 +260,10 @@ struct Watching {
   /** A prefix of the finished run, ranked the same, with the candidate list cut short. */
   virtual void so_far(const Found& run) { (void)run; }
 };
+
+/** Where the search and the verification read the camera's ways out of the view: halfway from the
+ *  start to the target's middle, a freed axis staying at the start. */
+cup_tape::Spot camera_spot(const Question& q);
 
 Found search_tree(const Question& question, const BaseTable& base, const Grid& grid,
                   const Selection& selection, const Calibration& cal,
