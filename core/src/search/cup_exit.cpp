@@ -40,6 +40,8 @@ const Row kStill[65536] = {
 const int kCDownHeld = 6;
 const int kViewEnds = 2;
 const int kFirstTap = 3;
+/** Frames after B for the follow camera to settle, as the table was measured. */
+const int kSettleOut = 400;
 
 }  // namespace
 
@@ -66,6 +68,36 @@ bool leave(int facing, int dir, Way way, Leave* out) {
     l.window = r.first == r.settled && r.settle == 0 ? 0 : r.window;
   }
   l.csangle &= 0xFFFF;
+  if (out) *out = l;
+  return true;
+}
+
+namespace {
+
+int exit_value(const cup_tape::Spot& at, int facing, int dir, Way way, int wait) {
+  using cup_tape::Exit;
+  const int steps = dir == 0 ? 0 : cup_tape::kSteps;
+  if (way == Way::CDown) {
+    return cup_tape::exit_series(facing, dir, steps, wait, Exit::CDown, cup_tape::kCDownHeldFor,
+                                 30, &at)
+        .back();
+  }
+  if (way == Way::Settled) {
+    return cup_tape::exit_series(facing, dir, steps, wait, Exit::B, 0, kSettleOut, &at).back();
+  }
+  /* The first frame after the view ends. */
+  return cup_tape::exit_series(facing, dir, steps, wait, Exit::B, 0, 3, &at)[2];
+}
+
+}  // namespace
+
+bool leave_at(const cup_tape::Spot& at, int facing, int dir, Way way, Leave* out) {
+  Leave l;
+  if (!leave(facing, dir, way, &l)) return false;
+  facing &= 0xFFFF;
+  const int v = exit_value(at, facing, dir, way, l.wait);
+  if (exit_value(at, facing, dir, way, cup_tape::kLongWait) != v) return false;
+  l.csangle = v & 0xFFFF;
   if (out) *out = l;
   return true;
 }

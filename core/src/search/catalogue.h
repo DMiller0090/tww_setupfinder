@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "cup_tape.h"
 #include "engine/room.h"
 #include "engine/session.h"
 
@@ -106,8 +107,10 @@ int ess_hold(int gap);
 int ess_median(Seat seat);
 
 /** The reseat an ESS turn starts with: the C-down exit's csangle at `facing` (`cup_dir` as
- *  `Pose`) and its fewest frames to the stick. False where the exit table holds no promise. */
-bool ess_reseat(int facing, int cup_dir, int* csangle, int* frames);
+ *  `Pose`) and its fewest frames to the stick. False where the exit table holds no promise. With
+ *  `at`, the csangle is the engine's with Link standing there. */
+bool ess_reseat(int facing, int cup_dir, int* csangle, int* frames,
+                const cup_tape::Spot* at = nullptr);
 
 /** The ESS turn's target, or false where it would not turn (no camera, already there) or would
  *  reverse instead (`checkNextMode`'s `> 0x7800` gate sends that to procWaitTurn). */
@@ -125,8 +128,9 @@ inline bool takes_taps(Seat seat) {
 /** Whether the turnaround reads a camera the room can block (`cam_clear.h`). */
 inline bool runs_camera(Seat seat) { return leaves_the_view(seat); }
 
-/** `model_step` for `leaves_the_view` seats. `frames` is the wait, the exit and the taps. */
-bool leave_the_view(Seat seat, const Pose& from, Pose* to);
+/** `model_step` for `leaves_the_view` seats. `frames` is the wait, the exit and the taps. With
+ *  `at`, the exits' csangles are the engine's with Link standing there; held L keeps its table. */
+bool leave_the_view(Seat seat, const Pose& from, Pose* to, const cup_tape::Spot* at = nullptr);
 
 Seat seat_of(const std::string& id);
 

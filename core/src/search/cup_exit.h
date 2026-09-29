@@ -2,6 +2,8 @@
  * Field camera, open flat ground, and the stick neutral through the exit. */
 #pragma once
 
+#include "cup_tape.h"
+
 namespace cup_exit {
 
 enum class Way {
@@ -25,5 +27,9 @@ struct Leave {
 /** A turn ending on `facing`; `dir` +1 raised, -1 lowered, 0 no turn (then `frames` and `wait`
  *  count from the C up press). False where the table holds no promise. */
 bool leave(int facing, int dir, Way way, Leave* out);
+
+/** `leave` with the csangle off the engine's camera, Link standing at `at`; the frames stay the
+ *  table's. Also false where the table's wait and a long one exit differently there. */
+bool leave_at(const cup_tape::Spot& at, int facing, int dir, Way way, Leave* out);
 
 }  // namespace cup_exit

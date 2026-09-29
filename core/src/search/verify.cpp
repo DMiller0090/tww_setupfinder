@@ -107,9 +107,11 @@ Link step_through_engine(const BaseMove& row, const Edge& edge, const tww_engine
     return link;
   }
 
-  /* The camera is the model's: the roster is told it for aiming, and the engine never runs one. A
-     way out of the view aims off `model_step`'s camera and adds its wait and exit frames. */
+  /* The roster is told the camera for aiming, and the drive runs none. A way out of the view and an
+     ESS reseat read theirs off the engine's camera where Link stands; far from the origin the
+     game's floats round it off the tables, which were measured at the origin. */
   const Seat seat = seat_of(row.id);
+  const cup_tape::Spot spot = {static_cast<f32>(x), static_cast<f32>(y), static_cast<f32>(z)};
   Pose left;
   if (leaves_the_view(seat)) {
     Pose was;
@@ -118,14 +120,14 @@ Link step_through_engine(const BaseMove& row, const Edge& edge, const tww_engine
     was.has_camera = link.has_camera;
     was.cup_dir = cup_dir;
     was.taps = edge.taps;
-    if (!model_step(seat, row.turn, 1, was, &left)) {
+    if (!leave_the_view(seat, was, &left, &spot)) {
       link.why = row.id + ": cannot be stepped from this state";
       return link;
     }
   }
   /* An ESS turn aims off its own reseat, and adds its frames. */
   int seated = 0, reseat = 0;
-  if (is_ess(seat) && !ess_reseat(link.facing, cup_dir, &seated, &reseat)) {
+  if (is_ess(seat) && !ess_reseat(link.facing, cup_dir, &seated, &reseat, &spot)) {
     link.why = row.id + ": cannot be stepped from this state";
     return link;
   }

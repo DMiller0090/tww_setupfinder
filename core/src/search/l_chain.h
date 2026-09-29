@@ -1,6 +1,8 @@
 /* The csangle a turnaround reads after N L taps with C-down held, from a compiled-in table. */
 #pragma once
 
+#include "cup_tape.h"
+
 namespace l_chain {
 
 const int kTaps = 8;
@@ -13,5 +15,9 @@ bool held(int facing, int taps, int* csangle, int* frames);
 /** C-down chain after a turn ending on `facing`; `dir` +1 raising, -1 lowering, 0 no turn; `taps`
  *  from 1; `frames` from the C-down press. False as for `held`. */
 bool cdown(int facing, int dir, int taps, int* csangle, int* frames);
+
+/** `cdown` with the csangle off the engine's camera, Link standing at `at`; the frames stay the
+ *  table's. Also false where the table's wait and a long one differ there. */
+bool cdown_at(const cup_tape::Spot& at, int facing, int dir, int taps, int* csangle, int* frames);
 
 }  // namespace l_chain

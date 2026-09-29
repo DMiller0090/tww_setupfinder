@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include "../src/search/catalogue.h"
 #include "../src/search/cup_exit.h"
+#include "../src/search/cup_tape.h"
 #include "../src/search/l_chain.h"
 #include "../src/search/corridor.h"
 #include "../src/search/dzb.h"
@@ -4319,6 +4320,84 @@ struct LastFrame : search::Watcher {
   }
 };
 
+void exits_at_tests() {
+  /* At the origin the engine's exits are the tables', so the tape and the pose change nothing. */
+  const cup_tape::Spot origin = {0.0f, 0.0f, 0.0f};
+  const cup_exit::Way ways[] = {cup_exit::Way::CDown, cup_exit::Way::Settled,
+                                cup_exit::Way::Stretch};
+  int tried = 0, same = 0, taps_tried = 0, taps_same = 0;
+  for (int i = 0; i < 12; ++i) {
+    const int f = static_cast<int>((static_cast<uint32_t>(i) * 2654435761u) & 0xFFFF);
+    for (int dir = -1; dir <= 1; ++dir) {
+      for (cup_exit::Way w : ways) {
+        cup_exit::Leave table, engine;
+        if (!cup_exit::leave(f, dir, w, &table)) continue;
+        ++tried;
+        if (cup_exit::leave_at(origin, f, dir, w, &engine) && engine.csangle == table.csangle &&
+            engine.frames == table.frames) {
+          ++same;
+        }
+      }
+      for (int taps = 1; taps <= 2; ++taps) {
+        int table = 0, engine = 0, tf = 0, ef = 0;
+        if (!l_chain::cdown(f, dir, taps, &table, &tf)) continue;
+        ++taps_tried;
+        if (l_chain::cdown_at(origin, f, dir, taps, &engine, &ef) && engine == table && ef == tf) {
+          ++taps_same;
+        }
+      }
+    }
+  }
+  ok(tried > 50 && same == tried, "exits at: the engine's exit at the origin is the table's on " +
+                                      std::to_string(same) + " of " + std::to_string(tried));
+  ok(taps_tried > 20 && taps_same == taps_tried,
+     "exits at: the engine's taps at the origin are the table's on " + std::to_string(taps_same) +
+         " of " + std::to_string(taps_tried));
+
+  /* His console at z -204009: facing 15672, the view left by C-down with no turn, csangle 15682. */
+  const cup_tape::Spot his = {-144.753647f, 668.66925f, -204009.375f};
+  cup_exit::Leave table, there;
+  ok(cup_exit::leave(15672, 0, cup_exit::Way::CDown, &table) && table.csangle == 15672,
+     "exits at: the table, built at the origin, reads 15672 there");
+  const bool read = cup_exit::leave_at(his, 15672, 0, cup_exit::Way::CDown, &there);
+  ok(read && there.csangle == 15682,
+     "exits at: the engine where he stood reads the console's 15682, got " +
+         std::to_string(there.csangle));
+  int seated = 0, frames = 0;
+  ok(search::ess_reseat(15672, 0, &seated, &frames, &his) && seated == 15682,
+     "exits at: the ESS reseat where he stood is the console's 15682");
+
+  /* The verification turns ESS Right onto the reseat the engine reads there, not the table's. */
+  const search::BaseTable base = search::base_table(false);
+  int row = -1;
+  for (size_t i = 0; i < base.move.size(); ++i) {
+    if (base.move[i].id == "ess_right_turn") row = static_cast<int>(i);
+  }
+  const search::Slab ground = search::slab(static_cast<double>(his.y), 0.0, 0.0, 262144.0);
+  search::Question q;
+  q.start_x = his.x;
+  q.start_y = his.y;
+  q.start_z = his.z;
+  q.start_facing = 15672;
+  q.has_camera = false;
+  q.target.has_x = false;
+  q.target.has_z = false;
+  q.steps = 1;
+  q.moves.push_back("ess_right_turn");
+  q.end_facing.any = true;
+  search::Found one;
+  search::Candidate c;
+  search::Edge e;
+  e.row = row;
+  c.path.push_back(e);
+  one.candidate.push_back(c);
+  const search::Verified said = search::verify(one, q, base, &ground.room);
+  const int turned = said.consult.empty() ? -1 : said.consult[0].facing;
+  ok(row >= 0 && turned == ((15682 + 0xC000) & 0xFFFF),
+     "exits at: verified, ESS Right where he stood ends on the console's reseat less a quarter, "
+     "got " + std::to_string(turned));
+}
+
 void ess_tests() {
   const char* ids[3] = {"ess_up_turn", "ess_left_turn", "ess_right_turn"};
   const int offsets[3] = {0x0000, 0x4000, 0xC000};
@@ -5130,11 +5209,12 @@ int main() {
       return 1;
     }
   }
-  /* `SETUPCORE_ONLY=ess` runs the roster and ESS checks alone; the whole suite takes minutes. */
+  /* `SETUPCORE_ONLY=ess` runs the roster, ESS and exit checks alone; the whole suite takes minutes. */
   if (const char* only = std::getenv("SETUPCORE_ONLY")) {
     if (std::string(only) == "ess") {
       catalogue_tests();
       ess_tests();
+      exits_at_tests();
       std::printf("%s\n", failed == 0 ? "all checks passed" : "CHECKS FAILED");
       return failed == 0 ? 0 : 1;
     }
@@ -5161,6 +5241,7 @@ int main() {
   steps_bound_tests();
   verify_tests();
   cup_exit_tests();
+  exits_at_tests();
   l_chain_tests();
   ess_tests();
   camera_type_tests();

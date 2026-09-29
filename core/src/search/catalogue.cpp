@@ -485,9 +485,11 @@ int ess_hold(int gap) {
   return table[static_cast<size_t>(g + 0x8000)];
 }
 
-bool ess_reseat(int facing, int cup_dir, int* csangle, int* frames) {
+bool ess_reseat(int facing, int cup_dir, int* csangle, int* frames, const cup_tape::Spot* at) {
   cup_exit::Leave l;
-  if (!cup_exit::leave(facing & 0xFFFF, cup_dir, cup_exit::Way::CDown, &l)) return false;
+  const bool read = at ? cup_exit::leave_at(*at, facing & 0xFFFF, cup_dir, cup_exit::Way::CDown, &l)
+                       : cup_exit::leave(facing & 0xFFFF, cup_dir, cup_exit::Way::CDown, &l);
+  if (!read) return false;
   if (csangle) *csangle = l.csangle & 0xFFFF;
   if (frames) *frames = l.frames;
   return true;
@@ -515,7 +517,7 @@ bool ess_target(Seat seat, int facing, bool has_camera, int camera, int* target)
   return true;
 }
 
-bool leave_the_view(Seat seat, const Pose& from, Pose* to) {
+bool leave_the_view(Seat seat, const Pose& from, Pose* to, const cup_tape::Spot* at) {
   Pose out = from;
   out.facing = from.facing & 0xFFFF;
   out.has_camera = true;
@@ -533,13 +535,18 @@ bool leave_the_view(Seat seat, const Pose& from, Pose* to) {
                             : seat == Seat::LeavesByBSettle ? cup_exit::Way::Settled
                                                             : cup_exit::Way::Stretch;
   cup_exit::Leave l;
-  if (!cup_exit::leave(from.facing, from.cup_dir, way, &l)) return false;
+  const bool read = at ? cup_exit::leave_at(*at, from.facing, from.cup_dir, way, &l)
+                       : cup_exit::leave(from.facing, from.cup_dir, way, &l);
+  if (!read) return false;
   out.camera = l.csangle & 0xFFFF;
   out.frames = l.frames;
   /* C-down kept held, then taps; frames count from the C-down press, after the wait. */
   if (seat == Seat::LeavesByCDown && from.taps > 0) {
     int frames = 0;
-    if (!l_chain::cdown(out.facing, from.cup_dir, from.taps, &out.camera, &frames)) return false;
+    const bool tapped =
+        at ? l_chain::cdown_at(*at, out.facing, from.cup_dir, from.taps, &out.camera, &frames)
+           : l_chain::cdown(out.facing, from.cup_dir, from.taps, &out.camera, &frames);
+    if (!tapped) return false;
     if (from.taps == 1 && out.camera == (l.csangle & 0xFFFF)) return false;
     out.frames = l.wait + frames;
   }

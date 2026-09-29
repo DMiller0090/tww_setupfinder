@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "disc/link.h"
+#include "search/cup_tape.h"
 #include "boundary/game_boundary.h"
 #include "d/actor/d_a_player_main.h"
 #include "engine/session.h"
@@ -20,98 +21,27 @@
 
 namespace {
 
-/** One frame of the tape; `cstick_y` -1 is held down. */
-struct Frame {
-  int facing;
-  float stick_x;
-  bool in_view;
-  float cstick_y;
-  bool l = false;
-};
+using cup_tape::Exit;
+using cup_tape::Frame;
+using cup_tape::add_taps;
+using cup_tape::exit_series;
+using cup_tape::kCDownHeldFor;
+using cup_tape::kChainTail;
+using cup_tape::kLongWait;
+using cup_tape::kSteps;
+using cup_tape::kTapGap;
+using cup_tape::kTapHeld;
+using cup_tape::tape_of;
 
 /** Camera style by mode, for the header: manual (12), view (4), follow (0). */
 std::atomic<int> g_style[16];
 
-/** One camera yaw per tape frame, the camera seated behind the tape's first facing. */
 std::vector<int> run_tape(const std::vector<Frame>& tape, int seat = -1) {
-  tww_engine::Init init;
-  init.pos.set(0.0f, 0.0f, 0.0f);
-  init.shape_angle_y = static_cast<s16>(tape[0].facing);
-  init.travel_angle_y = static_cast<s16>(tape[0].facing);
-  init.normal_speed = 0.0f;
-  init.speed_f = 0.0f;
-  init.proc = daPy_lk_c::daPyProc_WAIT_e;
-  tww_engine::RunOptions opts;
-  opts.ground = tww_engine::RunOptions::Ground::Supplied;
-  opts.floor_y = 0.0f;
-  opts.camera = true;
-  opts.camera_yaw = static_cast<s16>(seat >= 0 ? seat : tape[0].facing);
-  tww_engine::Session session(init, NULL, opts);
-  session.bind();
-  cam_stub_lockon = false;
-  std::vector<int> yaw;
-  yaw.reserve(tape.size());
-  for (const Frame& f : tape) {
-    session.lk.shape_angle.y = static_cast<s16>(f.facing);
-    session.lk.current.angle.y = static_cast<s16>(f.facing);
-    g_mDoCPd_cpadInfo[PAD_1].mMainStickPosX = f.stick_x;
-    g_mDoCPd_cpadInfo[PAD_1].mCStickPosY = f.cstick_y;
-    g_mDoCPd_cpadInfo[PAD_1].mCStickValue = f.cstick_y < 0.0f ? -f.cstick_y : f.cstick_y;
-    /* L is both the analog trigger and `dAttention_c::Lockon()`. */
-    g_mDoCPd_cpadInfo[PAD_1].mTriggerLeft = f.l ? 1.0f : 0.0f;
-    cam_stub_lockon = f.l;
-    if (f.in_view) {
-      session.lk.stub_player_status0 |= daPyStts0_SUBJECT_e;
-    } else {
-      session.lk.stub_player_status0 &= ~daPyStts0_SUBJECT_e;
-    }
-    session.runCamera(1);
-    const tww_engine::Session::CameraFacts facts = session.cameraFacts();
-    yaw.push_back(facts.yaw & 0xFFFF);
-    if (facts.mode >= 0 && facts.mode < 16) g_style[facts.mode] = facts.style;
+  const cup_tape::Run r = cup_tape::run(tape, seat);
+  for (int m = 0; m < 16; ++m) {
+    if (r.style[m] >= 0) g_style[m] = r.style[m];
   }
-  cam_stub_lockon = false;
-  g_mDoCPd_cpadInfo[PAD_1].mTriggerLeft = 0.0f;
-  return yaw;
-}
-
-enum class Exit { B, CDown };
-
-/** A C up turn ending on `end` (`dir` +1 raises the facing) and its exit. `wait` counts from the
- *  stick's release, or from the C up press when `steps` is 0. `*exit_at` is the exit's first frame. */
-std::vector<Frame> tape_of(int end, int dir, int steps, int wait, Exit exit, int held, int out,
-                           int* exit_at) {
-  const int start = (end - dir * 655 * steps) & 0xFFFF;
-  std::vector<Frame> t;
-  for (int i = 0; i < 11; ++i) t.push_back({start, 0.0f, false, 0.0f});
-  // The view's status comes up on the C up press's fourth frame.
-  const int entry = steps > 0 ? 14 : wait;
-  for (int i = 0; i < entry; ++i) t.push_back({start, 0.0f, i >= 3, 0.0f});
-  const int turn_at = static_cast<int>(t.size());
-  const float stick = dir > 0 ? -1.0f : 1.0f;
-  for (int i = 0; i < steps; ++i) t.push_back({start, stick, true, 0.0f});
-  for (int i = 0; i < (steps > 0 ? wait : 0); ++i) t.push_back({start, 0.0f, true, 0.0f});
-  *exit_at = static_cast<int>(t.size());
-  // The view's status stays up for B's first two frames and C-down's first four.
-  if (exit == Exit::B) {
-    t.push_back({start, 0.0f, true, 0.0f});
-    for (int i = 0; i < out; ++i) t.push_back({start, 0.0f, i == 0, 0.0f});
-  } else {
-    for (int i = 0; i < held; ++i) t.push_back({start, 0.0f, i < 4, -1.0f});
-    for (int i = 0; i < out; ++i) t.push_back({start, 0.0f, false, 0.0f});
-  }
-  // As on console: the facing lags the stick two frames and steps 655 a frame.
-  for (size_t i = static_cast<size_t>(turn_at) + 2; i < t.size(); ++i) {
-    const int k = std::min(static_cast<int>(i) - (turn_at + 2) + 1, steps);
-    t[i].facing = (start + dir * 655 * k) & 0xFFFF;
-  }
-  return t;
-}
-
-std::vector<int> exit_series(int end, int dir, int steps, int wait, Exit exit, int held, int out) {
-  int at = 0;
-  const std::vector<int> y = run_tape(tape_of(end, dir, steps, wait, exit, held, out, &at));
-  return std::vector<int>(y.begin() + at, y.end());
+  return r.yaw;
 }
 
 /** The engine's first flat stretch after B runs one frame longer than the console's, so `settle`
@@ -134,11 +64,8 @@ enum Doubt {
   kBNotFlat = 8,          // B still moving in the last `kFlat` frames
 };
 
-const int kSteps = 17;
-const int kLongWait = 40;
 const int kOut = 400;
 const int kFlat = 60;
-const int kCDownHeldFor = 10;
 
 void read_b(const std::vector<int>& y, Entry* e) {
   // y[0] is the press and y[1] the view's last frame; the view has ended from y[2].
@@ -416,12 +343,9 @@ int generate(const char* path, int threads) {
 /* L chains: with C-down held, each L tap moves the manual camera one rung. N taps cost
    `base + kTapEvery * N`, `base` the worst over N. */
 const int kTaps = 8;
-const int kTapGap = 1;
-const int kTapHeld = 2;
 const int kTapEvery = kTapGap + kTapHeld;
 const int kHold = 20;
 const int kHoldWithC = 2;
-const int kChainTail = 40;
 
 struct Chain {
   int value[kTaps + 1] = {0};  // after n taps; [0] is the start
@@ -441,17 +365,6 @@ void settled_at(const std::vector<int>& y, int* value, int* from) {
   int i = static_cast<int>(y.size()) - 1;
   while (i > 0 && y[static_cast<size_t>(i) - 1] == *value) --i;
   *from = i;
-}
-
-/** `n` taps with C-down held, from index `at` of `t`, then C-down one frame more and a tail. */
-void add_taps(std::vector<Frame>* t, size_t at, int facing, int n, int gap, int held) {
-  t->resize(at);
-  for (int k = 0; k < n; ++k) {
-    for (int i = 0; i < gap; ++i) t->push_back({facing, 0.0f, false, -1.0f, false});
-    for (int i = 0; i < held; ++i) t->push_back({facing, 0.0f, false, -1.0f, true});
-  }
-  t->push_back({facing, 0.0f, false, -1.0f, false});
-  for (int i = 0; i < kChainTail; ++i) t->push_back({facing, 0.0f, false, 0.0f, false});
 }
 
 Chain held_chain(int facing, int seat, int gap = kTapGap, int held = kTapHeld) {

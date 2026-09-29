@@ -83,6 +83,7 @@ add_library(setupcore_lib STATIC
   src/search/catalogue.cpp
   src/search/camera_type.cpp
   src/search/cam_clear.cpp
+  src/search/cup_tape.cpp
   src/search/cup_exit.cpp
   src/search/l_chain.cpp
   src/search/approx.cpp

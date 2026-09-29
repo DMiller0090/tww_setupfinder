@@ -1,6 +1,9 @@
 #include "l_chain.h"
 
 #include <cstdint>
+#include <vector>
+
+#include "cup_exit.h"
 
 namespace l_chain {
 namespace {
@@ -73,6 +76,36 @@ bool cdown(int facing, int dir, int taps, int* csangle, int* frames) {
   const int sign = dir < 0 ? -1 : 1;
   if (csangle) *csangle = (facing + sign * r.value[taps]) & 0xFFFF;
   if (frames) *frames = r.base + kTapEvery * taps;
+  return true;
+}
+
+namespace {
+
+/** The yaw the camera settles on after `taps` taps, from a C-down exit left after `wait`. */
+int tapped(const cup_tape::Spot& at, int facing, int dir, int wait, int taps) {
+  const int steps = dir == 0 ? 0 : cup_tape::kSteps;
+  int from = 0;
+  std::vector<cup_tape::Frame> t = cup_tape::tape_of(facing, dir == 0 ? 1 : dir, steps, wait,
+                                                     cup_tape::Exit::CDown, 6, 0, &from);
+  const int turned = t.back().facing;
+  cup_tape::add_taps(&t, t.size(), turned, taps, cup_tape::kTapGap, cup_tape::kTapHeld);
+  return cup_tape::run(t, -1, &at).yaw.back();
+}
+
+}  // namespace
+
+bool cdown_at(const cup_tape::Spot& at, int facing, int dir, int taps, int* csangle, int* frames) {
+  facing &= 0xFFFF;
+  int f = 0;
+  if (!cdown(facing, dir, taps, nullptr, &f)) return false;
+  cup_exit::Leave l;
+  if (!cup_exit::leave(facing, dir, cup_exit::Way::CDown, &l)) return false;
+  const int v = tapped(at, facing, dir, l.wait, taps);
+  if (tapped(at, facing, dir, cup_tape::kLongWait, taps) != v) return false;
+  /* As `cdown`: a tap that does not move the camera is not a chain. */
+  if (taps > 1 && tapped(at, facing, dir, l.wait, taps - 1) == v) return false;
+  if (csangle) *csangle = v & 0xFFFF;
+  if (frames) *frames = f;
   return true;
 }
 
