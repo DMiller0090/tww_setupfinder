@@ -32,6 +32,9 @@ struct Run {
  *  Link is at the origin. */
 Run run(const std::vector<Frame>& tape, int seat = -1, const Spot* at = nullptr);
 
+/** Tapes `run` has driven so far, this process, all threads. */
+unsigned long long runs();
+
 enum class Exit { B, CDown };
 
 /** A C up turn ending on `end` (`dir` +1 raises the facing) and its exit. `wait` counts from the

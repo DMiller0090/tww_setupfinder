@@ -1745,8 +1745,9 @@ void search_tests() {
   ok(run.count.expanded > 0 && run.count.generated >= run.count.expanded,
      "with more states generated than expanded, which is what a dominance test does");
 
-  /* Session::built() counts every engine run in the process; the walk must add none. base_table
-     drives the engine, so it is built before the count. */
+  /* Session::built() counts every engine run in the process; the walk may add only the camera
+     tapes of the rows it reaches (`cup_tape::runs`). base_table drives the engine, so it is built
+     before the count. */
   {
     search::Question walk;
     walk.start_facing = 0;
@@ -1768,16 +1769,18 @@ void search_tests() {
        "them, so what it measures is a walk that had every chance to consult");
 
     const unsigned long long before = tww_engine::Session::built();
+    const unsigned long long tapes_before = cup_tape::runs();
     const search::Found walked = search::search_tree(walk, base, flat_grid, flat_sel,
                                                      search::Calibration::measured());
     const unsigned long long after = tww_engine::Session::built();
+    const unsigned long long tapes = cup_tape::runs() - tapes_before;
 
     ok(walked.count.expanded > 0 && walked.count.generated > walked.count.expanded,
        "the walk that is being counted really walked, so zero engine runs is a measurement and "
        "not an empty loop");
-    ok(after == before,
-       "RED: and it asked the engine for nothing - not for a turnaround's camera, not for a "
-       "turn's, not for a single frame of a single move");
+    ok(after - before == tapes,
+       "RED: and it asked the engine for no move - only the camera tapes of the rows it reached, " +
+           std::to_string(tapes) + " of them, not a single frame of a single move");
   }
 
   search::Question nowhere = q;

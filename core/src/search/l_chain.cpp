@@ -92,6 +92,21 @@ int tapped(const cup_tape::Spot& at, int facing, int dir, int wait, int taps) {
   return cup_tape::run(t, -1, &at).yaw.back();
 }
 
+struct TapArgs {
+  cup_tape::Spot at;
+  int facing, dir, wait, taps;
+};
+
+/** The chain's value at the table's wait, or -1 where a long wait differs or the last tap does not
+ *  move the camera (as `cdown`). */
+int run_taps(const void* p) {
+  const TapArgs& a = *static_cast<const TapArgs*>(p);
+  const int v = tapped(a.at, a.facing, a.dir, a.wait, a.taps);
+  if (tapped(a.at, a.facing, a.dir, cup_tape::kLongWait, a.taps) != v) return -1;
+  if (a.taps > 1 && tapped(a.at, a.facing, a.dir, a.wait, a.taps - 1) == v) return -1;
+  return v;
+}
+
 }  // namespace
 
 bool cdown_at(const cup_tape::Spot& at, int facing, int dir, int taps, int* csangle, int* frames) {
@@ -100,10 +115,9 @@ bool cdown_at(const cup_tape::Spot& at, int facing, int dir, int taps, int* csan
   if (!cdown(facing, dir, taps, nullptr, &f)) return false;
   cup_exit::Leave l;
   if (!cup_exit::leave(facing, dir, cup_exit::Way::CDown, &l)) return false;
-  const int v = tapped(at, facing, dir, l.wait, taps);
-  if (tapped(at, facing, dir, cup_tape::kLongWait, taps) != v) return false;
-  /* As `cdown`: a tap that does not move the camera is not a chain. */
-  if (taps > 1 && tapped(at, facing, dir, l.wait, taps - 1) == v) return false;
+  const TapArgs args = {at, facing, dir, l.wait, taps};
+  const int v = cup_exit::kept(cup_exit::key('t', at, facing, dir, taps), run_taps, &args);
+  if (v < 0) return false;
   if (csangle) *csangle = v & 0xFFFF;
   if (frames) *frames = f;
   return true;

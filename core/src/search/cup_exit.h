@@ -2,6 +2,8 @@
  * Field camera, open flat ground, and the stick neutral through the exit. */
 #pragma once
 
+#include <string>
+
 #include "cup_tape.h"
 
 namespace cup_exit {
@@ -31,5 +33,18 @@ bool leave(int facing, int dir, Way way, Leave* out);
 /** `leave` with the csangle off the engine's camera, Link standing at `at`; the frames stay the
  *  table's. Also false where the table's wait and a long one exit differently there. */
 bool leave_at(const cup_tape::Spot& at, int facing, int dir, Way way, Leave* out);
+
+/** Rows run through the engine so far, this process, and the time they took. */
+struct Computed {
+  long long rows = 0;
+  long long ns = 0;
+};
+Computed computed();
+
+/** A value run through the engine once per key and kept, for every thread; `run` fills a miss. */
+int kept(const std::string& key, int (*run)(const void*), const void* args);
+
+/** A `kept` key: what is kept, the spot's bits and three numbers. */
+std::string key(char what, const cup_tape::Spot& at, int a, int b, int c);
 
 }  // namespace cup_exit

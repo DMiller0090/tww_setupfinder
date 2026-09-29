@@ -1,6 +1,7 @@
 #include "cup_tape.h"
 
 #include <algorithm>
+#include <atomic>
 
 #include "boundary/game_boundary.h"
 #include "d/actor/d_a_player_main.h"
@@ -8,8 +9,14 @@
 #include "m_Do/m_Do_controller_pad.h"
 
 namespace cup_tape {
+namespace {
+std::atomic<unsigned long long> g_runs(0);
+}  // namespace
+
+unsigned long long runs() { return g_runs.load(); }
 
 Run run(const std::vector<Frame>& tape, int seat, const Spot* at) {
+  ++g_runs;
   Run out;
   for (int& s : out.style) s = -1;
   tww_engine::Init init;

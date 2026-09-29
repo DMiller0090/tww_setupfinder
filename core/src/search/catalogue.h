@@ -135,7 +135,10 @@ bool leave_the_view(Seat seat, const Pose& from, Pose* to, const cup_tape::Spot*
 Seat seat_of(const std::string& id);
 
 /** Inline because the walk calls it per generated state. The string overload calls this. */
-inline bool model_step(Seat seat, int turn_per_step, int steps, const Pose& from, Pose* to) {
+/** With `at`, the camera after a way out of the view or an ESS reseat is the engine's with Link
+ *  standing there, each row run once and kept (`cup_exit::leave_at`). */
+inline bool model_step(Seat seat, int turn_per_step, int steps, const Pose& from, Pose* to,
+                       const cup_tape::Spot* at = nullptr) {
   Pose out = from;
   out.facing = (from.facing & 0xFFFF);
   out.camera = (from.camera & 0xFFFF);
@@ -150,10 +153,10 @@ inline bool model_step(Seat seat, int turn_per_step, int steps, const Pose& from
     const int net = turn_per_step * steps;
     out.cup_dir = net > 0 ? 1 : net < 0 ? -1 : 0;
   } else if (leaves_the_view(seat)) {
-    if (!leave_the_view(seat, from, &out)) return false;
+    if (!leave_the_view(seat, from, &out, at)) return false;
   } else if (is_ess(seat)) {
     int seated = 0, reseat = 0, target = 0;
-    if (!ess_reseat(out.facing, from.cup_dir, &seated, &reseat) ||
+    if (!ess_reseat(out.facing, from.cup_dir, &seated, &reseat, at) ||
         !ess_target(seat, out.facing, true, seated, &target)) {
       return false;
     }

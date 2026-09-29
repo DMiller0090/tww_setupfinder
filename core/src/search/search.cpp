@@ -1,4 +1,5 @@
 #include "search.h"
+#include "cup_exit.h"
 #include "l_chain.h"
 
 #include <algorithm>
@@ -7,6 +8,7 @@
 #include <functional>
 #include <limits>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -651,10 +653,24 @@ std::vector<Edge> canonical(const std::vector<Edge>& path) {
 
 /* Depth-first so memory is O(depth); children nearest-first so early results are good. The order
    never changes what a finished run returns. */
+/** Halfway from the start to the target's middle; a freed axis stays at the start. */
+static cup_tape::Spot camera_spot(const Question& q) {
+  const Target& t = q.target;
+  const double tx = !t.has_x ? q.start_x : t.ranged ? 0.5 * (t.x0 + t.x1) : t.x;
+  const double tz = !t.has_z ? q.start_z : t.ranged ? 0.5 * (t.z0 + t.z1) : t.z;
+  const double ty = t.has_y ? 0.5 * (t.y0 + t.y1) : q.start_y;
+  cup_tape::Spot s;
+  s.x = static_cast<float>(0.5 * (q.start_x + tx));
+  s.y = static_cast<float>(0.5 * (q.start_y + ty));
+  s.z = static_cast<float>(0.5 * (q.start_z + tz));
+  return s;
+}
+
 Found search_tree(const Question& question, const BaseTable& base, const Grid& grid,
                   const Selection& selection, const Calibration& cal, const Stepper* instead,
                   Watching* watch) {
   Found found;
+  const cup_tape::Spot mid = camera_spot(question);
   const std::vector<int> rows = rows_for(question, base);
   found.unstepped = unstepped_for(question, base);
   found.rate = fastest_rate(base, rows, grid, &cal);
@@ -1034,7 +1050,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
         was.has_camera = here.has_camera;
         was.cup_dir = here.cup_dir;
         Pose now;
-        if (!model_step(o.seat, row.turn, o.steps, was, &now)) continue;
+        if (!model_step(o.seat, row.turn, o.steps, was, &now, &mid)) continue;
         child.facing = now.facing;
         child.camera = now.camera;
         child.has_camera = now.has_camera;
@@ -1065,7 +1081,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
         was.cup_dir = here.cup_dir;
         was.taps = o.taps;
         Pose now;
-        if (!model_step(o.seat, row.turn, 1, was, &now)) {
+        if (!model_step(o.seat, row.turn, 1, was, &now, &mid)) {
           ++count->generated;
           continue;
         }

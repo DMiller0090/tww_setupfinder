@@ -1,6 +1,11 @@
 #include "cup_exit.h"
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <cstring>
+#include <mutex>
+#include <unordered_map>
 
 namespace cup_exit {
 namespace {
@@ -89,14 +94,71 @@ int exit_value(const cup_tape::Spot& at, int facing, int dir, Way way, int wait)
   return cup_tape::exit_series(facing, dir, steps, wait, Exit::B, 0, 3, &at)[2];
 }
 
+struct ExitArgs {
+  cup_tape::Spot at;
+  int facing, dir, wait;
+  Way way;
+};
+
+/** The exit at the table's wait, or -1 where a long wait exits differently. */
+int run_exit(const void* p) {
+  const ExitArgs& a = *static_cast<const ExitArgs*>(p);
+  const int v = exit_value(a.at, a.facing, a.dir, a.way, a.wait);
+  return exit_value(a.at, a.facing, a.dir, a.way, cup_tape::kLongWait) == v ? v : -1;
+}
+
+std::mutex g_kept_lock;
+std::unordered_map<std::string, int> g_kept;
+std::atomic<long long> g_rows(0), g_ns(0);
+/** Past this many the cache is emptied; a row costs a few ms to run again. */
+const size_t kKeptMost = 2000000;
+
 }  // namespace
+
+Computed computed() {
+  Computed c;
+  c.rows = g_rows.load();
+  c.ns = g_ns.load();
+  return c;
+}
+
+std::string key(char what, const cup_tape::Spot& at, int a, int b, int c) {
+  char k[25];
+  std::memcpy(k, &what, 1);
+  std::memcpy(k + 1, &at.x, 4);
+  std::memcpy(k + 5, &at.y, 4);
+  std::memcpy(k + 9, &at.z, 4);
+  std::memcpy(k + 13, &a, 4);
+  std::memcpy(k + 17, &b, 4);
+  std::memcpy(k + 21, &c, 4);
+  return std::string(k, sizeof k);
+}
+
+int kept(const std::string& k, int (*run)(const void*), const void* args) {
+  {
+    std::lock_guard<std::mutex> hold(g_kept_lock);
+    const auto at = g_kept.find(k);
+    if (at != g_kept.end()) return at->second;
+  }
+  const auto t0 = std::chrono::steady_clock::now();
+  const int v = run(args);
+  g_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - t0)
+              .count();
+  ++g_rows;
+  std::lock_guard<std::mutex> hold(g_kept_lock);
+  if (g_kept.size() >= kKeptMost) g_kept.clear();
+  g_kept.emplace(k, v);
+  return v;
+}
 
 bool leave_at(const cup_tape::Spot& at, int facing, int dir, Way way, Leave* out) {
   Leave l;
   if (!leave(facing, dir, way, &l)) return false;
   facing &= 0xFFFF;
-  const int v = exit_value(at, facing, dir, way, l.wait);
-  if (exit_value(at, facing, dir, way, cup_tape::kLongWait) != v) return false;
+  const ExitArgs args = {at, facing, dir, l.wait, way};
+  const int v = kept(key('e', at, facing, dir, static_cast<int>(way)), run_exit, &args);
+  if (v < 0) return false;
   l.csangle = v & 0xFFFF;
   if (out) *out = l;
   return true;
