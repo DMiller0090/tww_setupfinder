@@ -18,10 +18,13 @@
   <div class="phead"><h2>{t.bounds}</h2><span class="sp"></span>
     <span class="r">{shut.length === 0 ? t.anywhere : shut.map(s => label[s]).join(' · ')}</span></div>
   <div class="body">
+    <!-- Each label sits above its field, so a full float fits within the rail. -->
     <div class="bounds">
       {#each ['zmax', 'xmin'] as const as side}
-        <div class="bside {side}"><label for="b{side}">{label[side]}</label>
+        <div class="bside {side}" style:flex-direction="column" style:align-items="center"
+             style:gap=".125rem"><label for="b{side}">{label[side]}</label>
           <input type="text" id="b{side}" bind:value={settings.bValue[side]}
+                 style:width="calc(12ch + .75rem)" style:flex="none"
                  disabled={settings.bOpen[side]} oninput={keep}
                  onchange={() => { settings.bValue[side] = snapF32(settings.bValue[side]); keep(); }}
                  title={settings.bOpen[side] ? t.sideOpen : label[side]} autocomplete="off"
@@ -45,8 +48,10 @@
         {/each}
       </div>
       {#each ['xmax', 'zmin'] as const as side}
-        <div class="bside {side}"><label for="b{side}">{label[side]}</label>
+        <div class="bside {side}" style:flex-direction="column" style:align-items="center"
+             style:gap=".125rem"><label for="b{side}">{label[side]}</label>
           <input type="text" id="b{side}" bind:value={settings.bValue[side]}
+                 style:width="calc(12ch + .75rem)" style:flex="none"
                  disabled={settings.bOpen[side]} oninput={keep}
                  onchange={() => { settings.bValue[side] = snapF32(settings.bValue[side]); keep(); }}
                  title={settings.bOpen[side] ? t.sideOpen : label[side]} autocomplete="off"
