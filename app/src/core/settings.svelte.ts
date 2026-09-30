@@ -8,6 +8,7 @@ import {base} from '../lib/facing.svelte';
 import {catalog, type SwordFilter} from './catalog.svelte';
 import {MOVES, TYPES, COMBO_MAX} from './moves';
 import {toBytes, type Bytes} from './address';
+import {noList, ROLES, type List} from './list';
 import {start, target} from '../fixtures/start';
 import type {Side} from '../room/marks';
 
@@ -19,7 +20,7 @@ const DEFAULTS: Record<string, {id: string; frames: number}[]> =
 const SETTLE = 250;
 
 type Ground = 'none' | 'floors' | 'solid';
-type Shape = 'point' | 'range' | 'addr';
+type Shape = 'point' | 'range' | 'addr' | 'list';
 type FacingMode = 'any' | 'single' | 'range';
 
 export const settings = $state({
@@ -72,6 +73,7 @@ export const settings = $state({
   addr: [toBytes(Number(target.tx)), toBytes(0), toBytes(Number(target.tz))] as Bytes[],
   bOpen: {xmin: true, xmax: true, zmin: true, zmax: true} as Record<Side, boolean>,
   bValue: {xmin: '', xmax: '', zmin: '', zmax: ''} as Record<Side, string>,
+  list: noList(),
 });
 
 /** Deviations from the catalogue only, so a move added later starts on. */
@@ -94,6 +96,7 @@ interface Question {
   addr: Bytes[];
   bOpen: Record<Side, boolean>;
   bValue: Record<Side, string>;
+  list?: List;
 }
 
 interface KeptSession {
@@ -177,7 +180,7 @@ function takeQuestion(kept: Question, keepStart: boolean): void {
     settings.sf = aWord(kept.sf, settings.sf);
     settings.scam = aWord(kept.scam, settings.scam);
   }
-  settings.shape = oneOf(kept.shape, ['point', 'range', 'addr'], settings.shape);
+  settings.shape = oneOf(kept.shape, ['point', 'range', 'addr', 'list'], settings.shape);
   settings.fmode = oneOf(kept.fmode, ['any', 'single', 'range'], settings.fmode);
   settings.tx = snapF32(aWord(kept.tx, settings.tx));
   settings.tz = snapF32(aWord(kept.tz, settings.tz));
@@ -203,6 +206,21 @@ function takeQuestion(kept: Question, keepStart: boolean): void {
     settings.bOpen[side] = aFlag(kept.bOpen?.[side], settings.bOpen[side]);
     settings.bValue[side] = snapF32(aWord(kept.bValue?.[side], settings.bValue[side]));
   }
+  settings.list = aList(kept.list) ?? settings.list;
+}
+
+const copyList = (l: List): List =>
+  ({cells: l.cells.map(r => r.slice()), head: l.head, x: l.x, z: l.z, f: l.f});
+
+/** All or nothing, as the address is: a list with a bad cell or column is dropped. */
+function aList(v: unknown): List | null {
+  const l = v as List | undefined;
+  if (!l || typeof l !== 'object' || !Array.isArray(l.cells) || typeof l.head !== 'boolean') {
+    return null;
+  }
+  if (!l.cells.every(r => Array.isArray(r) && r.every(c => typeof c === 'string'))) return null;
+  if (!ROLES.every(r => Number.isInteger(l[r]) && l[r] >= -1)) return null;
+  return copyList(l);
 }
 
 function takeSession(kept: KeptSession): void {
@@ -252,6 +270,7 @@ function questionNow(): Question {
     addr: settings.addr.map(ax => ax.slice()),
     bOpen: {...settings.bOpen},
     bValue: {...settings.bValue},
+    list: copyList(settings.list),
   };
 }
 

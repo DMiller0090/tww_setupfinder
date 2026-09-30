@@ -44,6 +44,10 @@ export const t = {
   point: 'Point',
   range: 'Range',
   address: 'Address',
+  list: 'List',
+  /** The Target panel's count of imported rows; pressing it reopens the preview. */
+  rowsCount: (n: number): string => n === 1 ? '1 row' : `${n.toLocaleString()} rows`,
+  importWord: 'Import',
   aim: 'Aim',
   aimPlayer: 'Player',
   aimOverhead: 'Overhead item',

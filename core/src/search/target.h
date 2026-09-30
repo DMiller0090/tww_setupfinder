@@ -93,6 +93,10 @@ struct Target {
   /* The range; the caller orders them. */
   double x0 = 0, x1 = 0, z0 = 0, z1 = 0;
 
+  /** A list's rows as x, z pairs, each row a point of the goal. `ranged` is set and the range is
+   *  their box, which the corridor is laid over; the region is only the rows. */
+  std::vector<double> list;
+
   /* Only an address has a height. */
   bool has_y = false;
   double y0 = 0, y1 = 0;

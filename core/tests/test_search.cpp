@@ -610,6 +610,51 @@ void target_tests() {
      "a freed axis is a band across the room, bounded by the room and by nothing else");
 }
 
+/** A List as the seam builds one: the rows, and their box as the range. */
+search::Target listed(const std::vector<double>& rows) {
+  search::Target t;
+  t.ranged = true;
+  t.list = rows;
+  t.x0 = t.x1 = rows[0];
+  t.z0 = t.z1 = rows[1];
+  for (size_t i = 0; i + 1 < rows.size(); i += 2) {
+    t.x0 = std::min(t.x0, rows[i]); t.x1 = std::max(t.x1, rows[i]);
+    t.z0 = std::min(t.z0, rows[i + 1]); t.z1 = std::max(t.z1, rows[i + 1]);
+  }
+  return t;
+}
+
+void list_tests() {
+  geom::Mesh half;
+  quad(half.ground, -200, -200, 0, 200, 0);
+  const search::Corridor c = search::corridor(-300, 0, 300, 0, 60);
+  search::Limits limits;
+  limits.cell = 25.0;
+  const search::Selection s = search::select(half, c);
+  const search::Grid g = search::build(s, c, limits);
+
+  /* Two rows on the floor and one past its edge. */
+  search::Target three = listed({-100, 0, -20, 50, 150, 0});
+  ok(three.distance(150.0, 10.0) == 10.0,
+     "before the floor is read, a list is as far as its nearest row");
+  ok(search::resolve(&three, g, s.ground, 5.0) && three.ground.kept > 0,
+     "a list keeps the floor under its rows, and a row with none is dropped without refusing it");
+  ok(three.distance(-100.0, 0.0) == 0.0 && three.distance(-100.0, 30.0) == 25.0,
+     "each row is a point with the tolerance about it, as a point target is");
+  ok(three.distance(-25.0, 40.0) == 5.0,
+     "RED: the nearest row is the goal, not the first one");
+  ok(three.distance(-60.0, 25.0) > 0.0,
+     "RED: the box around the rows is not a place; between them is off the goal");
+  double nx = 0, nz = 0;
+  three.nearest(-22.0, 60.0, &nx, &nz);
+  ok(std::fabs(nx + 22.0) < 1e-9 && std::fabs(nz - 55.0) < 1e-9,
+     "the nearest place is on the nearest row's own floor");
+
+  search::Target none = listed({150, 0, 180, 40});
+  ok(!search::resolve(&none, g, s.ground, 5.0),
+     "a list with no row on any floor is refused, the same as a point with none");
+}
+
 void ground_tests() {
   geom::Mesh two;
   quad(two.ground, -400, -400, 400, 400, 0);
@@ -5266,6 +5311,11 @@ int main() {
   /* `SETUPCORE_ONLY=ess` runs the roster, ESS and exit checks alone, and `fewest` the fewest
      checks; the whole suite takes minutes. */
   if (const char* only = std::getenv("SETUPCORE_ONLY")) {
+    if (std::string(only) == "list") {
+      list_tests();
+      std::printf("%s\n", failed == 0 ? "all checks passed" : "CHECKS FAILED");
+      return failed == 0 ? 0 : 1;
+    }
     if (std::string(only) == "fewest") {
       fewest_tests();
       std::printf("%s\n", failed == 0 ? "all checks passed" : "CHECKS FAILED");
@@ -5289,6 +5339,7 @@ int main() {
   attached_tests();
   target_tests();
   ground_tests();
+  list_tests();
   clipped_tests();
   mask_tests();
   within_tests();

@@ -19,6 +19,7 @@
   import {log, catchThrows, say, logLine} from './lib/log.svelte';
   import {chosen, costs, total} from './core/catalog.svelte';
   import {TYPES} from './core/moves';
+  import {rows} from './core/list';
   import {live, toggle, connect, askMachine, canConnect, watch} from './core/live.svelte';
   import {canChoose, chooseDisc} from './core/disc';
   import type {Actor, Emulator} from './core/fixtures';
@@ -255,6 +256,9 @@
         mark = {kind: 'range' as const,
           x0: Math.min(a, b), x1: Math.max(a, b), z0: Math.min(c, d), z1: Math.max(c, d)};
       }
+    } else if (settings.shape === 'list') {
+      const points = rows(settings.list).map(r => ({x: r.x, z: r.z}));
+      if (points.length) mark = {kind: 'list' as const, points};
     } else {
       /* Cut to the Range box when checked, as the core cuts the region. */
       const whole = addrHull();
@@ -308,6 +312,9 @@
          [t.target + ' ' + t.xMax, settings.rx2, 'rx2'],
          [t.target + ' ' + t.z, settings.rz1, 'rz1'],
          [t.target + ' ' + t.zMax, settings.rz2, 'rz2']] : []),
+    /* Nothing imported reads as an empty box, and reaching it lands on Browse. */
+    ...(settings.shape === 'list' && !rows(settings.list).length
+      ? [[t.list, '', 'listBrowse']] : []),
     ...((Object.keys(settings.bOpen) as Side[]).filter(s => !settings.bOpen[s])
       .map(s => [t.bounds + ' ' + boundLabel[s], settings.bValue[s], 'b' + s])),
     ...(settings.fmode !== 'any' ? [[t.target + ' ' + t.facing, settings.fA, 'fa']] : []),
@@ -341,6 +348,9 @@
       && r.x0 !== null && r.x1 !== null && r.z0 !== null && r.z1 !== null
       ? {x0: r.x0, x1: r.x1, z0: r.z0, z1: r.z1} : null;
     const box = within ? addrHull() : tm;
+    if (tm && tm.kind === 'list') {
+      return {shape: 'list' as const, rows: tm.points.flatMap(p => [p.x, p.z])};
+    }
     return tm && tm.kind === 'range' && box && 'x0' in box
       ? {shape: 'range' as const, x0: box.x0, x1: box.x1, z0: box.z0, z1: box.z1,
          ...(height ?? {}), ...(mask ? {mask} : {}), ...(within ? {within} : {})}

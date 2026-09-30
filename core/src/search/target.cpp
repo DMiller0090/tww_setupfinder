@@ -894,73 +894,113 @@ bool resolve(Target* target, const Grid& grid, const std::vector<float>& ground,
     }
   };
 
-  for (int iz = iz0; iz <= iz1; ++iz) {
-    for (int ix = ix0; ix <= ix1; ++ix) {
-      const size_t c = static_cast<size_t>(grid.at(ix, iz));
-      if ((grid.mark[c] & kNoGround) != 0) continue;
-      for (int k = grid.start[c]; k < grid.start[c + 1]; ++k) {
-        const int t = grid.tri[static_cast<size_t>(k)];
-        if (t < 0 || t >= tri_count || seen[static_cast<size_t>(t)]) continue;
-        if (stop != nullptr && (*stop)()) { kept = Region(); return false; }
-        seen[static_cast<size_t>(t)] = 1;
-
-        const float* f = &ground[static_cast<size_t>(t) * 9];
-        /* In the exact case the game's own triangle is cut as far as the ground check reaches. */
-        if (exact) {
-          if (was_cut(t)) {
-            std::array<float, 9> key;
-            std::memcpy(key.data(), src_of(t), sizeof(float) * 9);
-            if (std::find(walked_sources.begin(), walked_sources.end(), key) != walked_sources.end()) {
+  if (!target->list.empty()) {
+    /* Each row is its own point, clipped as a point target is; the box around them all is never
+       a place. A triangle two rows reach is kept twice, which changes no distance. */
+    const double w = slack + across;
+    std::vector<int> stamp(seen.size(), -1);
+    const auto clamp = [](int c, int n) { return std::max(0, std::min(n - 1, c)); };
+    for (size_t r = 0; r + 1 < target->list.size(); r += 2) {
+      if (stop != nullptr && (*stop)()) { kept = Region(); return false; }
+      const Span sx{target->list[r] - w, target->list[r] + w};
+      const Span sz{target->list[r + 1] - w, target->list[r + 1] + w};
+      const int cx0 = clamp(grid_column(sx.lo, grid.origin_x, grid.cell, grid.nx), grid.nx);
+      const int cx1 = clamp(grid_column(sx.hi, grid.origin_x, grid.cell, grid.nx), grid.nx);
+      const int cz0 = clamp(grid_column(sz.lo, grid.origin_z, grid.cell, grid.nz), grid.nz);
+      const int cz1 = clamp(grid_column(sz.hi, grid.origin_z, grid.cell, grid.nz), grid.nz);
+      for (int iz = cz0; iz <= cz1; ++iz) {
+        for (int ix = cx0; ix <= cx1; ++ix) {
+          const size_t c = static_cast<size_t>(grid.at(ix, iz));
+          if ((grid.mark[c] & kNoGround) != 0) continue;
+          for (int k = grid.start[c]; k < grid.start[c + 1]; ++k) {
+            const int t = grid.tri[static_cast<size_t>(k)];
+            if (t < 0 || t >= tri_count || stamp[static_cast<size_t>(t)] == static_cast<int>(r)) {
               continue;
             }
-            walked_sources.push_back(key);
-          }
-          f = src_of(t);
-          tri = reach_of_tri(t);
-        } else {
-          tri.assign(f, f + 9);
-        }
-        bool near_known = false;
-
-        for (const Span& sx : xs) {
-          if (!reaches(tri, 0, sx)) continue;
-          cut_x = tri;
-          clip_half(&cut_x, &work, 0, sx.lo, true);
-          clip_half(&cut_x, &work, 0, sx.hi, false);
-          if (cut_x.size() < 6) continue;
-          for (const Span& sz : zs) {
-            if (!reaches(cut_x, 2, sz)) continue;
+            stamp[static_cast<size_t>(t)] = static_cast<int>(r);
+            tri.assign(&ground[static_cast<size_t>(t) * 9], &ground[static_cast<size_t>(t) * 9] + 9);
+            if (!reaches(tri, 0, sx)) continue;
+            cut_x = tri;
+            clip_half(&cut_x, &work, 0, sx.lo, true);
+            clip_half(&cut_x, &work, 0, sx.hi, false);
+            if (cut_x.size() < 6 || !reaches(cut_x, 2, sz)) continue;
             cut_z = cut_x;
             clip_half(&cut_z, &work, 2, sz.lo, true);
             clip_half(&cut_z, &work, 2, sz.hi, false);
-            /* Two vertices (a segment) is kept; only an empty clip is dropped. */
-            if (cut_z.size() < 6) continue;
-            if (exact && !near_known) {
-              near_of(t);
-              near_known = true;
+            if (cut_z.size() >= 6) take(cut_z);
+          }
+        }
+      }
+    }
+  } else {
+    for (int iz = iz0; iz <= iz1; ++iz) {
+      for (int ix = ix0; ix <= ix1; ++ix) {
+        const size_t c = static_cast<size_t>(grid.at(ix, iz));
+        if ((grid.mark[c] & kNoGround) != 0) continue;
+        for (int k = grid.start[c]; k < grid.start[c + 1]; ++k) {
+          const int t = grid.tri[static_cast<size_t>(k)];
+          if (t < 0 || t >= tri_count || seen[static_cast<size_t>(t)]) continue;
+          if (stop != nullptr && (*stop)()) { kept = Region(); return false; }
+          seen[static_cast<size_t>(t)] = 1;
+
+          const float* f = &ground[static_cast<size_t>(t) * 9];
+          /* In the exact case the game's own triangle is cut as far as the ground check reaches. */
+          if (exact) {
+            if (was_cut(t)) {
+              std::array<float, 9> key;
+              std::memcpy(key.data(), src_of(t), sizeof(float) * 9);
+              if (std::find(walked_sources.begin(), walked_sources.end(), key) != walked_sources.end()) {
+                continue;
+              }
+              walked_sources.push_back(key);
             }
-            if (exact && !cut_y) {
-              exact_places(*target, f, cut_z, near, -std::numeric_limits<double>::infinity(),
-                           std::numeric_limits<double>::infinity(), take, stop);
-            } else if (exact) {
-              for (const Span& sy : ys) {
-                if (!reaches(cut_z, 1, sy)) continue;
-                poly = cut_z;
-                clip_half(&poly, &work, 1, sy.lo, true);
-                clip_half(&poly, &work, 1, sy.hi, false);
-                exact_places(*target, f, poly, near, sy.lo + kHeightSlack + target->aim_lift,
-                             sy.hi - kHeightSlack + target->aim_lift, take, stop);
+            f = src_of(t);
+            tri = reach_of_tri(t);
+          } else {
+            tri.assign(f, f + 9);
+          }
+          bool near_known = false;
+
+          for (const Span& sx : xs) {
+            if (!reaches(tri, 0, sx)) continue;
+            cut_x = tri;
+            clip_half(&cut_x, &work, 0, sx.lo, true);
+            clip_half(&cut_x, &work, 0, sx.hi, false);
+            if (cut_x.size() < 6) continue;
+            for (const Span& sz : zs) {
+              if (!reaches(cut_x, 2, sz)) continue;
+              cut_z = cut_x;
+              clip_half(&cut_z, &work, 2, sz.lo, true);
+              clip_half(&cut_z, &work, 2, sz.hi, false);
+              /* Two vertices (a segment) is kept; only an empty clip is dropped. */
+              if (cut_z.size() < 6) continue;
+              if (exact && !near_known) {
+                near_of(t);
+                near_known = true;
               }
-            } else if (cut_y) {
-              for (const Span& sy : ys) {
-                if (!reaches(cut_z, 1, sy)) continue;
-                poly = cut_z;
-                clip_half(&poly, &work, 1, sy.lo, true);
-                clip_half(&poly, &work, 1, sy.hi, false);
-                take(poly);
+              if (exact && !cut_y) {
+                exact_places(*target, f, cut_z, near, -std::numeric_limits<double>::infinity(),
+                             std::numeric_limits<double>::infinity(), take, stop);
+              } else if (exact) {
+                for (const Span& sy : ys) {
+                  if (!reaches(cut_z, 1, sy)) continue;
+                  poly = cut_z;
+                  clip_half(&poly, &work, 1, sy.lo, true);
+                  clip_half(&poly, &work, 1, sy.hi, false);
+                  exact_places(*target, f, poly, near, sy.lo + kHeightSlack + target->aim_lift,
+                               sy.hi - kHeightSlack + target->aim_lift, take, stop);
+                }
+              } else if (cut_y) {
+                for (const Span& sy : ys) {
+                  if (!reaches(cut_z, 1, sy)) continue;
+                  poly = cut_z;
+                  clip_half(&poly, &work, 1, sy.lo, true);
+                  clip_half(&poly, &work, 1, sy.hi, false);
+                  take(poly);
+                }
+              } else {
+                take(cut_z);
               }
-            } else {
-              take(cut_z);
             }
           }
         }
@@ -1187,6 +1227,11 @@ double Target::distance(double px, double pz) const {
     /* Falls back to the box rather than answering infinity. */
     if (!std::isinf(best)) return std::sqrt(best);
   }
+  if (!list.empty()) {
+    double nx = 0, nz = 0;
+    nearest(px, pz, &nx, &nz);
+    return std::sqrt((px - nx) * (px - nx) + (pz - nz) * (pz - nz));
+  }
   if (ranged) {
     const double dx = has_x ? outside(px, x0, x1) : 0.0;
     const double dz = has_z ? outside(pz, z0, z1) : 0.0;
@@ -1307,6 +1352,18 @@ void Target::nearest(double px, double pz, double* nx, double* nz) const {
       *nz = bz;
       return;
     }
+  }
+  if (!list.empty()) {
+    double best = std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i + 1 < list.size(); i += 2) {
+      const double dx = px - list[i], dz = pz - list[i + 1];
+      if (dx * dx + dz * dz < best) {
+        best = dx * dx + dz * dz;
+        *nx = list[i];
+        *nz = list[i + 1];
+      }
+    }
+    return;
   }
   if (ranged) {
     *nx = has_x ? onto(px, x0, x1) : px;

@@ -491,6 +491,28 @@ bool is_log(const std::string& line) {
  *  is not a number (e.g. `null`) frees that axis. */
 void target_of(const Json& request, search::Target* into) {
   const Json& target = request.at("target");
+  if (target.at("shape").as_str() == "list") {
+    // x, z pairs; a pair with a non-number is dropped whole.
+    const Json& rows = target.at("rows");
+    const std::vector<Json> none;
+    const std::vector<Json>& it = rows.type() == Json::Type::Arr ? rows.items() : none;
+    for (size_t i = 0; i + 1 < it.size(); i += 2) {
+      if (it[i].type() != Json::Type::Num || it[i + 1].type() != Json::Type::Num) continue;
+      const double x = coordinate(it[i]), z = coordinate(it[i + 1]);
+      if (into->list.empty()) {
+        into->x0 = into->x1 = x;
+        into->z0 = into->z1 = z;
+      }
+      into->x0 = std::min(into->x0, x);
+      into->x1 = std::max(into->x1, x);
+      into->z0 = std::min(into->z0, z);
+      into->z1 = std::max(into->z1, z);
+      into->list.push_back(x);
+      into->list.push_back(z);
+    }
+    into->ranged = true;
+    return;
+  }
   if (target.at("shape").as_str() == "range") {
     into->ranged = true;
     // A free axis, not a +-FLT_MAX span, which would make the grid one cell.

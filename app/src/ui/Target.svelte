@@ -3,12 +3,37 @@
   import {t} from '../lib/strings';
   import {snapF32} from '../lib/f32';
   import Address from './Address.svelte';
+  import ListWin from './win/List.svelte';
+  import {read, rows, type List} from '../core/list';
   import {settings as store, keep} from '../core/settings.svelte';
   let {settings = store}: {settings?: typeof store} = $props();
 
   /* The address range switch needs all four Range edges as numbers. */
   const rangeTyped = $derived([settings.rx1, settings.rx2, settings.rz1, settings.rz2]
     .every(v => v.trim() !== '' && Number.isFinite(Number(v.trim()))));
+
+  /* The file's preview works on a copy; only Import writes it back. */
+  let file = $state<HTMLInputElement | null>(null);
+  let draft = $state<List | null>(null);
+  let previewing = $state(false);
+  const imported = $derived(rows(settings.list).length);
+
+  async function opened(): Promise<void> {
+    const got = file?.files?.[0];
+    if (!got) return;
+    draft = read(await got.text());
+    previewing = true;
+    /* Cleared, so choosing the same file again still fires. */
+    if (file) file.value = '';
+  }
+  function reopen(): void {
+    draft = {...settings.list, cells: settings.list.cells.map(r => r.slice())};
+    previewing = true;
+  }
+  function take(list: List): void {
+    settings.list = list;
+    keep();
+  }
 
   /* X and Z cannot both be free (no distance to order by); the last one checked wins. */
   function freesX(): void {
@@ -32,6 +57,8 @@
                 onclick={() => { settings.shape = 'range'; keep(); }}>{t.range}</button>
         <button type="button" aria-pressed={settings.shape === 'addr'}
                 onclick={() => { settings.shape = 'addr'; keep(); }}>{t.address}</button>
+        <button type="button" aria-pressed={settings.shape === 'list'}
+                onclick={() => { settings.shape = 'list'; keep(); }}>{t.list}</button>
       </span>
       <select aria-label={t.aim} bind:value={settings.aim} onchange={keep}>
         <option value="player">{t.aimPlayer}</option>
@@ -63,6 +90,21 @@
 
     {#if settings.shape === 'addr'}
       <Address {settings} />
+    {/if}
+
+    {#if settings.shape === 'list'}
+      <div>
+        <div class="f">
+          <button type="button" id="listBrowse" onclick={() => file?.click()}>{t.browse}</button>
+          {#if imported}
+            <button type="button" class="ghost" onclick={reopen}>{t.rowsCount(imported)}</button>
+          {/if}
+          <input type="file" accept=".csv,.tsv,.txt" hidden bind:this={file}
+                 onchange={() => void opened()}></div>
+        <div class="f"><label for="ltol">{t.tolerance}</label>
+          <input type="text" id="ltol" bind:value={settings.tol} autocomplete="off"
+                 spellcheck="false" oninput={keep}></div>
+      </div>
     {/if}
 
     {#if settings.shape === 'point'}
@@ -126,3 +168,7 @@
     </fieldset>
   </div>
 </section>
+
+{#if draft}
+  <ListWin bind:open={previewing} bind:draft {take} />
+{/if}

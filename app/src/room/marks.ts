@@ -18,7 +18,9 @@ export type TargetMark =
   /** `null` frees an axis; a huge finite float would overflow float32 on the GPU. */
   | {kind: 'range'; x0: number | null; x1: number | null; z0: number | null; z1: number | null;
      /** The hull of an address's bytes, not the target: drawn dashed, never filled or posted. */
-     address?: boolean};
+     address?: boolean}
+  /** A List's rows, each drawn as a dot on the floor under it. */
+  | {kind: 'list'; points: {x: number; z: number}[]};
 
 export interface BoundsMark {
   open: Record<Side, boolean>;
@@ -377,6 +379,14 @@ export function build(marks: Marks, box: THREE.Box3,
     }
     if (free.x && free.z) aim = new THREE.Vector3(midX, stand(midX, midZ), midZ);
     else aim = marker(free.x ? midX : (tm.x as number), free.z ? midZ : (tm.z as number), tm.tol);
+  } else if (tm && tm.kind === 'list') {
+    /* One draw for every row, at the ground's own screen-dot size; a row has no facing arc. */
+    const at: number[] = [];
+    for (const p of tm.points) at.push(p.x, stand(p.x, p.z) + 2, p.z);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(at, 3));
+    add(new THREE.Points(geo, new THREE.PointsMaterial({color: tc, size: 8,
+                                                        sizeAttenuation: false})));
   }
 
   /* ── the facing he has to finish on, drawn where he has to finish ─────────────────────────── */
