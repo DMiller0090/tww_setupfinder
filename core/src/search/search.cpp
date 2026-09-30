@@ -116,19 +116,16 @@ double consult_floor(double magnitude, double range) { return range * ulp32(magn
 /** The dominance signature: the quantised state. */
 struct Key {
   long long ix = 0, iy = 0, iz = 0, facing = 0;
-  /** Needed: the camera decides which turnaround is available. */
+  /** Whether there is one, and its yaw only where `Quanta::camera` says it is read. */
   long long camera = 0;
   bool operator==(const Key& o) const {
     return ix == o.ix && iy == o.iy && iz == o.iz && facing == o.facing && camera == o.camera;
   }
 };
 
-/** The dominance table: a fixed, direct-mapped cache sized to stay in CPU cache. Eviction only
- *  costs pruning, never an answer; a hit compares the whole key, so a hash collision cannot delete
- *  a subtree. */
+/** The dominance table: a direct-mapped cache of `Quanta::slots`. Eviction only costs pruning,
+ *  never an answer; a hit compares the whole key, so a hash collision cannot delete a subtree. */
 struct Seen {
-  static const size_t kSlots = 1u << 14;
-
   struct Slot {
     Key key;
     int frames;
@@ -139,7 +136,11 @@ struct Seen {
   };
   std::vector<Slot> slot;
 
-  void ready() { slot.assign(kSlots, Slot()); }
+  void ready(size_t slots) { slot.assign(slots, Slot()); }
+
+  static long long bytes(size_t slots) {
+    return static_cast<long long>(slots * sizeof(Slot));
+  }
 
   static size_t digest(const Key& k) {
     /* splitmix64 per field: the fields are small integers, so a plain xor would cluster. */
@@ -160,7 +161,7 @@ struct Seen {
 
   /** The cheapest frames this signature was reached at, or null. `where` is its slot either way. */
   int* find(const Key& k, size_t* where) {
-    const size_t at = digest(k) & (kSlots - 1);
+    const size_t at = digest(k) & (slot.size() - 1);
     *where = at;
     if (slot[at].taken && slot[at].key == k) return &slot[at].frames;
     return nullptr;
@@ -186,7 +187,7 @@ Key key_of(const Node& n, const Quanta& q) {
   k.iy = quantise(n.y, q.cell);
   k.iz = quantise(n.z, q.cell);
   k.facing = (n.facing & 0xFFFF) / q.facing;
-  k.camera = n.has_camera ? (n.camera & 0xFFFF) / q.facing : -1;
+  k.camera = !n.has_camera ? -1 : q.camera ? (n.camera & 0xFFFF) / q.facing : 0;
   /* A state just out of a C up turn has extra moves, so `cup_dir` is part of the key. */
   k.camera = k.camera * 3 + (n.cup_dir + 1);
   return k;
@@ -624,6 +625,10 @@ double widest_slack(const Question& question, const BaseTable& base, const std::
 
 Quanta quanta_for(const Question& question, const BaseTable& base, const std::vector<int>& rows) {
   Quanta q;
+  q.camera = question.camera_clear != nullptr;
+  /* A sixty-fourth of the memory ceiling per table, between 2^14 and 2^22 slots. */
+  const long long per_table = question.memory / 64;
+  while (q.slots < (size_t(1) << 22) && Seen::bytes(q.slots * 2) <= per_table) q.slots *= 2;
   /* Floored at magnitude 1: near the origin the f32 step is subnormal and overflows the cell index. */
   const double magnitude =
       std::max(1.0, std::max(std::fabs(question.start_x), std::fabs(question.start_z)));
@@ -936,6 +941,8 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
 
   /* Shortlist bytes across every walk; `bytes_of` deliberately overestimates. */
   std::atomic<long long> held_bytes(0);
+  /* The dominance tables, the split's and one per thread, share the ceiling with the shortlist. */
+  const long long tables = Seen::bytes(found.quanta.slots) * (std::max(1, question.cores) + 1);
   std::atomic<bool> memory_full(false);
   auto bytes_of = [](const Listed& one) -> long long {
     const long long n = static_cast<long long>(one.trail.path.size());
@@ -950,7 +957,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
      still handed over) and the run is no longer exhaustive. */
   auto list = [&](Reaped* r, const Listed& one) {
     const long long cost = bytes_of(one);
-    if (question.memory > 0 && held_bytes.load() + cost > question.memory) {
+    if (question.memory > 0 && tables + held_bytes.load() + cost > question.memory) {
       r->exhausted = false;
       memory_full.store(true);
       return;
@@ -1396,7 +1403,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
   Reaped prefix;
   int split = 1;
   for (;;) {
-    seed.ready();
+    seed.ready(found.quanta.slots);
     prefix = Reaped();
     {
       size_t where = 0;

@@ -138,10 +138,17 @@ struct Question {
 
 /** The dominance quantum, derived from the question:
  *    cell   = tolerance / sqrt(2), floored at the f32 position quantum at the start's magnitude;
- *    facing = tolerance * 65536 / (2 * pi * reach), floored at 1, `reach` the widest chosen move's. */
+ *    facing = tolerance * 65536 / (2 * pi * reach), floored at 1, `reach` the widest chosen move's.
+ *  `camera`: whether the camera is part of the signature. Only the room's camera check reads the
+ *  camera a move starts from; every model step reseats or keeps it, so with no check two states
+ *  a camera apart have the same future.
+ *  `slots`: the dominance table's size, a power of two from `Question::memory` alone (never the
+ *  thread count, D13), so a costlier twin is not let through for want of room. */
 struct Quanta {
   double cell = 0;
   int facing = 1;
+  bool camera = true;
+  size_t slots = size_t(1) << 14;
 };
 
 Quanta quanta_for(const Question& question, const BaseTable& base, const std::vector<int>& rows);

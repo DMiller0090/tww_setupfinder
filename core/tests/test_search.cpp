@@ -1767,6 +1767,28 @@ void search_tests() {
   ok(8192.0 / search::quanta_for(exact_q, base, every).cell < 4.0e18,
      "RED: an exact-hit question from the origin still gives every place in a room its own cell");
 
+  /* Only the room's camera check reads the camera a move starts from. Without it, two B Settle
+     turnarounds and one ESS Up Turn that end on one facing are one state, and the cheaper wins. */
+  ok(!search::quanta_for(exact_q, base, every).camera,
+     "RED: with no camera check the camera is not part of the signature");
+  const search::CamField some_room;
+  search::Question checked_q = exact_q;
+  checked_q.camera_clear = &some_room;
+  ok(search::quanta_for(checked_q, base, every).camera,
+     "RED: with one it is, because the check reads the camera a move starts from");
+
+  /* The table grows with the memory ceiling and never reads the thread count (D13). */
+  search::Question roomy = exact_q;
+  roomy.memory = 8LL << 30;
+  search::Question roomy_wide = roomy;
+  roomy_wide.cores = 8;
+  const size_t few = search::quanta_for(exact_q, base, every).slots;
+  const size_t many = search::quanta_for(roomy, base, every).slots;
+  ok(few == (size_t(1) << 14) && many > few && (many & (many - 1)) == 0,
+     "RED: a larger memory ceiling gives a larger dominance table, a power of two");
+  ok(search::quanta_for(roomy_wide, base, every).slots == many,
+     "RED: and the thread count does not change it");
+
   /* Sized off the roll's measurement so the question stays answerable as the table changes. */
   const search::BaseMove* roll = base.of("dry_roll");
   ok(roll != nullptr && roll->driven && roll->frames > 0,
@@ -5333,11 +5355,16 @@ int main() {
       return 1;
     }
   }
-  /* `SETUPCORE_ONLY=ess` runs the roster, ESS and exit checks alone, and `fewest` the fewest
-     checks; the whole suite takes minutes. */
+  /* `SETUPCORE_ONLY=ess` runs the roster, ESS and exit checks alone, `fewest` the fewest checks
+     and `search` the walk's own; the whole suite takes minutes. */
   if (const char* only = std::getenv("SETUPCORE_ONLY")) {
     if (std::string(only) == "list") {
       list_tests();
+      std::printf("%s\n", failed == 0 ? "all checks passed" : "CHECKS FAILED");
+      return failed == 0 ? 0 : 1;
+    }
+    if (std::string(only) == "search") {
+      search_tests();
       std::printf("%s\n", failed == 0 ? "all checks passed" : "CHECKS FAILED");
       return failed == 0 ? 0 : 1;
     }
