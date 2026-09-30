@@ -47,6 +47,8 @@ export const settings = $state({
   fewest: 1,
   steps: 4,
   frames: 120,
+  /** The span of frames reported, `leastFrames` to `frames`. */
+  leastFrames: 0,
 
   lastRoom: '',
   sx: start.x,
@@ -107,6 +109,7 @@ interface KeptSession {
   fewest?: number;
   steps: number;
   frames: number;
+  leastFrames?: number;
   lastRoom: string;
   rooms: Record<string, Question>;
 }
@@ -231,6 +234,8 @@ function takeSession(kept: KeptSession): void {
   settings.steps = Math.max(1, Math.round(aNumber(kept.steps, settings.steps)));
   settings.fewest = Math.min(settings.steps, Math.max(1, Math.round(aNumber(kept.fewest, 1))));
   settings.frames = aNumber(kept.frames, settings.frames);
+  settings.leastFrames =
+    Math.min(settings.frames, Math.max(0, Math.round(aNumber(kept.leastFrames, 0))));
   rooms = kept.rooms && typeof kept.rooms === 'object' ? {...kept.rooms} : {};
   settings.lastRoom = aWord(kept.lastRoom, '');
   const had = settings.lastRoom ? rooms[settings.lastRoom] : undefined;
@@ -280,6 +285,7 @@ function sessionNow(): KeptSession {
   return {
     ground: settings.ground, sword: settings.sword, actors: settings.actors, aim: settings.aim,
     fewest: settings.fewest, steps: settings.steps, frames: settings.frames,
+    leastFrames: settings.leastFrames,
     lastRoom: settings.lastRoom, rooms: all,
   };
 }

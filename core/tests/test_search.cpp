@@ -2598,6 +2598,31 @@ void fewest_tests() {
     if (c.path.size() >= 3 && kept.count(c.path) == 0) ++lost;
   }
   ok(lost == 0, "RED: every plan of three or more the unfiltered run records is recorded");
+
+  /* The frames floor, the same way: nothing quicker recorded, nothing slower lost. */
+  q.fewest = 0;
+  int quickest = 1 << 30, slowest = 0;
+  for (const search::Candidate& c : all.candidate) {
+    quickest = std::min(quickest, c.frames);
+    slowest = std::max(slowest, c.frames);
+  }
+  q.least_frames = (quickest + slowest) / 2;
+  const search::Found late = search::search_tree(q, base, grid, sel, stored);
+  int least = 1 << 30;
+  for (const search::Candidate& c : late.candidate) least = std::min(least, c.frames);
+  for (const search::Candidate& c : late.closest) least = std::min(least, c.frames);
+  std::printf("     least frames %d: %zu candidates against %zu, quickest %d against %d\n",
+              q.least_frames, late.candidate.size(), all.candidate.size(), least, quickest);
+  ok(quickest < q.least_frames, "without a floor, quicker plans are recorded");
+  ok(!late.candidate.empty(), "with a floor, slower plans are still recorded");
+  ok(least >= q.least_frames, "RED: and none quicker than the floor is recorded or kept as closest");
+  std::set<std::vector<search::Edge> > slow;
+  for (const search::Candidate& c : late.candidate) slow.insert(c.path);
+  size_t gone = 0;
+  for (const search::Candidate& c : all.candidate) {
+    if (c.frames >= q.least_frames && slow.count(c.path) == 0) ++gone;
+  }
+  ok(gone == 0, "RED: every plan at or over the floor the unfiltered run records is recorded");
 }
 
 /* A run with the steps bound drives every order a run without it does, and no closest is farther. */

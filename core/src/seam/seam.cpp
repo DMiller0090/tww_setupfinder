@@ -698,6 +698,7 @@ void search_run(const Out& out, const Json& request) {
   }
   q.tolerance = request.at("tol").as_num();
   q.frames = static_cast<int>(request.at("frames").as_num());
+  q.least_frames = static_cast<int>(request.at("leastFrames").as_num(0));
   q.steps = static_cast<int>(request.at("steps").as_num());
   q.fewest = static_cast<int>(request.at("fewest").as_num(0));
   q.greedy = request.at("greedy").as_bool(false);

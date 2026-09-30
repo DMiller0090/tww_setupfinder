@@ -903,6 +903,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     const size_t n = one.trail.path.size();
     const int shift = tie.frames.back() - one.trail.frames[s];
     if (one.end.frames + shift > question.frames) return false;
+    if (one.end.frames + shift < question.least_frames) return false;
     const int length = static_cast<int>(tie.path.size() + (n - 1 - s));
     if (length > deepest || length < question.fewest) return false;
     twin->trail = tie;
@@ -1292,7 +1293,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
       bool by_allowance = false;
       const bool near = Near::is(question, child, child.distance, &by_allowance);
       /* Too short to record, but still listed below: a tie can splice it into a longer plan. */
-      const bool short_of = child.depth < question.fewest;
+      const bool short_of = child.depth < question.fewest || child.frames < question.least_frames;
       const bool could_be_closest =
           !near && !short_of &&
           (closest.kept.size() < kKeep || child.distance <= closest.kept.front().distance);
@@ -1418,7 +1419,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
                                                   : question.target.distance(ax, az);
       }
       bool by_allowance = false;
-      if (question.fewest == 0 && Near::is(question, start, here.distance, &by_allowance)) {
+      if (question.fewest == 0 && question.least_frames <= 0 && Near::is(question, start, here.distance, &by_allowance)) {
         if (by_allowance) ++prefix.count.allowed;
         if (handing != nullptr) (*handing)(here);
         prefix.raw.push_back(here);

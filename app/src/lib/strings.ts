@@ -147,6 +147,9 @@ export const t = {
   stepSpan: (fewest: number, steps: number): string =>
     fewest === 1 ? `${steps}` : `${fewest}-${steps}`,
   frames: 'Frames',
+  /** The Frames box's own text: a count alone when the span starts at 0. */
+  frameSpan: (least: number, frames: number): string =>
+    least === 0 ? `${frames}` : `${least}-${frames}`,
   notStarted: 'Not started',
   logs: 'Logs',
 

@@ -89,6 +89,8 @@ struct Question {
    *  that ends where a shorter one did is not reported. Zero records the
    *  start itself when it is near. */
   int fewest = 0;
+  /** The same for a plan taking fewer frames: walked, never recorded, driven or kept as closest. */
+  int least_frames = 0;
   std::vector<std::string> moves;
 
   Collision collision = Collision::Solid;
