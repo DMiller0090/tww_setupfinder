@@ -941,8 +941,12 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
 
   /* Shortlist bytes across every walk; `bytes_of` deliberately overestimates. */
   std::atomic<long long> held_bytes(0);
-  /* The dominance tables, the split's and one per thread, share the ceiling with the shortlist. */
-  const long long tables = Seen::bytes(found.quanta.slots) * (std::max(1, question.cores) + 1);
+  /* The dominance tables share the ceiling with the shortlist: the split's, and one for each thread
+     this machine can run, the most the cores can ask for. Not the cores asked, which would let the
+     thread count decide what a full run keeps (`D13`). */
+  const long long tables =
+      Seen::bytes(found.quanta.slots) *
+      (static_cast<long long>(std::max(1u, std::thread::hardware_concurrency())) + 1);
   std::atomic<bool> memory_full(false);
   auto bytes_of = [](const Listed& one) -> long long {
     const long long n = static_cast<long long>(one.trail.path.size());
