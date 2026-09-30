@@ -705,8 +705,13 @@ void search_run(const Out& out, const Json& request) {
   q.check_range = request.at("checkRange").as_num(4.0);
   // Thread count changes run time only, never the results.
   q.cores = static_cast<int>(request.at("cores").as_num(1));
-  // Shortlist ceiling: a quarter of physical memory; 0 (unknown) means none.
-  q.memory = static_cast<long long>(machine::physical_memory() / 4);
+  // Shortlist ceiling: a share of physical memory, 25% unless asked; 0 (unknown) means none.
+  {
+    double share = request.at("memoryUsage").as_num(25.0);
+    if (!(share >= 5.0)) share = 5.0;
+    if (share > 90.0) share = 90.0;
+    q.memory = static_cast<long long>(static_cast<double>(machine::physical_memory()) * share / 100.0);
+  }
   q.aim = request.at("aim").as_str("player") == "overhead" ? search::Aim::Overhead
                                                           : search::Aim::Player;
   bounds_of(request, &q.bounds);

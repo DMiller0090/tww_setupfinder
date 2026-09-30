@@ -23,8 +23,18 @@ type Ground = 'none' | 'floors' | 'solid';
 type Shape = 'point' | 'range' | 'addr' | 'list';
 type FacingMode = 'any' | 'single' | 'range';
 
+/** Memory Usage: 5% to 90% of RAM in steps of 5; anything else snaps to the nearest step. */
+export const MEMORY_USAGE = {min: 5, max: 90, step: 5};
+export function memoryUsageOf(want: number): number {
+  if (!Number.isFinite(want)) return 25;
+  const {min, max, step} = MEMORY_USAGE;
+  return Math.min(max, Math.max(min, Math.round(want / step) * step));
+}
+
 export const settings = $state({
   cores: 1,
+  /** The search's memory ceiling, in percent of this machine's RAM. */
+  memoryUsage: 25,
   /** A multiple of the smallest position step, not a distance. Kept outside both switches. */
   checkRange: 4,
   /** Whether camera moves are refused where the room could block the camera. */
@@ -116,6 +126,7 @@ interface KeptSession {
 
 interface Kept {
   cores?: number;
+  memoryUsage?: number;
   checkRange?: number;
   cameraChecks?: boolean;
   hex?: boolean;
@@ -293,6 +304,7 @@ function sessionNow(): KeptSession {
 function body(): Kept {
   const out: Kept = {
     cores: settings.cores,
+    memoryUsage: settings.memoryUsage,
     checkRange: settings.checkRange,
     cameraChecks: settings.cameraChecks,
     hex: settings.hex,
@@ -343,6 +355,7 @@ export async function load(): Promise<void> {
     const [got] = await askAll({ask: 'settings'});
     const kept = (got ?? {}) as Kept;
     settings.cores = aNumber(kept.cores, settings.cores);
+    settings.memoryUsage = memoryUsageOf(aNumber(kept.memoryUsage, settings.memoryUsage));
     settings.checkRange = aNumber(kept.checkRange, settings.checkRange);
     settings.cameraChecks = aFlag(kept.cameraChecks, settings.cameraChecks);
     settings.hex = aFlag(kept.hex, settings.hex);

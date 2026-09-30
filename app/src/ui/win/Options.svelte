@@ -4,7 +4,7 @@
   import {place, say} from '../../lib/log.svelte';
   import {canChoose} from '../../core/disc';
   import {live} from '../../core/live.svelte';
-  import {settings, keep, tookHex} from '../../core/settings.svelte';
+  import {settings, keep, tookHex, MEMORY_USAGE} from '../../core/settings.svelte';
 
   /* The disc path is taken on `change`, not bound: reading a disc walks every room on it. */
   let {open = $bindable(false), browse, took, askTo}:
@@ -75,6 +75,15 @@
         <input type="number" id="lCo" min="1" max={live.cores}
                bind:value={settings.cores} onchange={keepCores}><span class="fact"
           >{t.ofCores(live.cores)}</span></div>
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="f" onpointerenter={tell(t.infoMemoryUsage)} onpointerleave={clear}
+           onfocusin={tell(t.infoMemoryUsage)} onfocusout={clear}>
+        <label for="lMem">{t.memoryUsage}</label>
+        <!-- Inline accent: the frozen stylesheet has no rule for a slider. -->
+        <input type="range" id="lMem" min={MEMORY_USAGE.min} max={MEMORY_USAGE.max}
+               step={MEMORY_USAGE.step} style:accent-color="var(--accent)" style:flex="1"
+               bind:value={settings.memoryUsage} onchange={keep}><span class="fact"
+          >{t.percent(settings.memoryUsage)}</span></div>
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="f" onpointerenter={clear} onpointerleave={clear}
            onfocusin={clear} onfocusout={clear}>

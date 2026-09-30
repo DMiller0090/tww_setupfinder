@@ -90,6 +90,7 @@ export interface Request {
   collision: 'none' | 'floors' | 'solid';
   bounds: AskedBounds;
   cores: number;
+  memoryUsage: number;
   checkRange: number;
   cameraChecks: boolean;
 }
@@ -126,7 +127,8 @@ export async function start(q: Request,
                                   leastFrames: q.leastFrames, tol: q.asked.tol,
                                   moves: q.moves, costs: q.costs, collision: q.collision,
                                   bounds: q.bounds,
-                                  cores: q.cores, checkRange: q.checkRange,
+                                  cores: q.cores, memoryUsage: q.memoryUsage,
+                                  checkRange: q.checkRange,
                                   cameraChecks: q.cameraChecks,
                                   aim: q.asked.aim === 'overhead' ? 'overhead' : 'player',
                                   ...q.room})) {

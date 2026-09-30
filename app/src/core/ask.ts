@@ -21,6 +21,8 @@ export type Question =
      steps: number; fewest: number; frames: number; leastFrames: number; tol: number;
      /* Changes how long a run takes, never what comes back. */
      cores: number;
+     /* Percent of this machine's RAM the search may hold. */
+     memoryUsage: number;
      /* A multiple of the smallest step a position can move by, not a distance. */
      checkRange: number;
      /* Off, camera moves are never refused for the room. */

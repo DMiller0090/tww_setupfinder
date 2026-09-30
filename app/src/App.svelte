@@ -32,7 +32,7 @@
   import type {Parts} from './room/renderer';
   import {addrBox, addrMask, addrY, isRun, withinRange} from './core/address';
   import {ground, follow as followGround} from './core/ground.svelte';
-  import {settings, keep, atRoom, roomKey, fromGame} from './core/settings.svelte';
+  import {settings, keep, atRoom, roomKey, fromGame, memoryUsageOf} from './core/settings.svelte';
   import {rail, vgutter, hgutter} from './ui/rail';
   import type {RoomIndex} from './core/fixtures';
   import {target} from './fixtures/start';
@@ -413,6 +413,7 @@
       collision: settings.ground,
       /* Capped at this machine's cores; a kept value may come from a bigger one. */
       cores: Math.max(1, Math.min(live.cores, Math.floor(settings.cores) || 1)),
+      memoryUsage: memoryUsageOf(settings.memoryUsage),
       /* 4 is the core's own default. */
       checkRange: Number.isFinite(settings.checkRange) && settings.checkRange >= 0
                     ? settings.checkRange : 4,
