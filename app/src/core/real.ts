@@ -100,6 +100,7 @@ function asPlan(read: PlanRead): Plan {
   const stops: Stop[] = read.stops.map(at => ({
     move: named(at.id, at.steps, at.taps ?? 0, at.frames),
     frames: at.frames, total: at.total, x: at.x, z: at.z, f: at.f, steps: at.steps,
+    taps: at.taps ?? 0,
     ...(at.y !== undefined ? {y: at.y} : {}),
   }));
   return {frames: read.frames, off: read.off, x: read.x, z: read.z, stops, d: read.d,

@@ -19,9 +19,10 @@ export interface Asked {
 const MISSES = 20;
 
 /** Keyed on the moves, so a plan in a fresh report stays chosen. The turn's signed steps are in it
- *  because +95 and -95 cost the same frames, and duplicate keys throw in the keyed table. */
+ *  because +95 and -95 cost the same frames, and the taps because a C Down turnaround with and
+ *  without them can too; duplicate keys throw in the keyed table. */
 export const planId = (p: Plan): string =>
-  p.stops.map(s => `${s.move.id}:${s.frames}:${s.steps}`).join('>');
+  p.stops.map(s => `${s.move.id}:${s.frames}:${s.steps}:${s.taps}`).join('>');
 
 export const run = $state({
   phase: 'design' as Phase,
