@@ -79,7 +79,7 @@
                  }}
                  title={running ? t.stopToChange : undefined}></span>
         <span class="num"><label for="lFr">{t.frames}</label>
-          <!-- Wide enough for a span of two six-digit counts. -->
+          <!-- Wide enough for six digits and a dash, such as 120-240. -->
           <input type="text" id="lFr" value={t.frameSpan(settings.leastFrames, settings.frames)}
                  disabled={running} style:width="calc(8ch + .75rem)"
                  style:flex="none"
