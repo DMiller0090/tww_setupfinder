@@ -256,7 +256,7 @@ struct Stepper {
   virtual Stepped step(const BaseMove& row, double x, double y, double z, int facing) const = 0;
 };
 
-/** Progress callbacks. `through` is parts of a thousand of the tree and only rises; returning
+/** Progress callbacks. `through` is parts of a million of the tree and only rises; returning
  *  false stops the walk with `Found::exhausted` false. */
 struct Watching {
   virtual ~Watching() {}

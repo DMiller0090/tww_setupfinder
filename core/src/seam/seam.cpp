@@ -884,8 +884,9 @@ void search_run(const Out& out, const Json& request) {
     }
   };
 
-  /* Progress: the walk fills the first half of `pct`, verification the second. A line is written
-     at most every `kTellMs`. */
+  /* Progress: the walk fills `pct` to 99, since its candidates are driven as they are found and the
+     pass after it has almost nothing left; 100 is the finished line. A line is written at most
+     every `kTellMs`. */
   const int kTellMs = 80;
   struct Telling : search::Watching, search::Consulting {
     const Out* out;
@@ -1047,15 +1048,15 @@ void search_run(const Out& out, const Json& request) {
           ? 100.0 * static_cast<double>(engine_ns) * 1e-9 / (seconds * walkers) : 0.0;
     }
 
-    /** `through` is in thousandths of the tree. */
+    /** `through` is in millionths of the tree. */
     bool walked(const search::Counters& count, int through, size_t candidates) {
       (void)candidates;
       held(count.held_bytes, count.memory_full);
       // Before the clock, so a stop does not wait for the next report.
       if (stop_asked()) return false;
       if (!due()) return true;
-      const int part = through < 0 ? 0 : (through > 1000 ? 1000 : through);
-      walked_pct = part * 50 / 1000;
+      const int part = through < 0 ? 0 : (through > 1000000 ? 1000000 : through);
+      walked_pct = std::min(99, part / 10000);
       say(Json::raw(table), walked_pct);
       return true;
     }
@@ -1175,9 +1176,6 @@ void search_run(const Out& out, const Json& request) {
       const bool last_one = static_cast<size_t>(sofar.count.consults) +
                                 static_cast<size_t>(sofar.count.discarded) >= of;
       if (!last_one && !due()) return true;
-      const int done = of > 0
-          ? static_cast<int>((sofar.count.consults + sofar.count.discarded) * 50 / of)
-          : 50;
       {
         std::lock_guard<std::mutex> lock(books);
         remember(sofar.consult);
@@ -1185,7 +1183,7 @@ void search_run(const Out& out, const Json& request) {
       }
       table = driven();
       figures(walked_states);
-      say(Json::raw(table), 50 + done);
+      say(Json::raw(table), walked_pct);
       return true;
     }
   };
