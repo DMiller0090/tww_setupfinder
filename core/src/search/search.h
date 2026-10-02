@@ -134,6 +134,10 @@ struct Question {
   /** Test-only switch to check that the distance bound never cuts a recorded state. */
   bool distance_bound = true;
 
+  /** Test-only switch to check that dropping childless states the item cannot land from loses
+   *  no plan (`item_facings`). */
+  bool drop_unlandable = true;
+
   /** The consult radius per move, in multiples of the f32 position quantum (`consult_floor`). At
    *  zero no model state lands on the target and nothing is confirmed. */
   double check_range = 4.0;
@@ -175,6 +179,9 @@ struct Counters {
   long long key_collapses = 0;
   long long left_corridor = 0;
   long long outside_bounds = 0;
+  /** Children with no children of their own at a facing the item cannot land from, dropped
+   *  before they are stepped. */
+  long long unlandable = 0;
   /** Candidates past the tolerance but inside the model's error: what `greedy` would discard. */
   long long allowed = 0;
   /** States kept as the closest reached rather than as near. */

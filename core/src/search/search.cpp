@@ -860,6 +860,24 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     if (deepest > kDeepest) deepest = kDeepest;
   }
 
+  /* A child that can have no children of its own and ends at a facing the item cannot land from
+     is never an answer, so it is dropped before it is stepped. "No children" is the move cap, or
+     too few frames left for the cheapest any move can take (`fewest_frames`, which the bound
+     already trusts). Never in the dominance table, it can only spare states, not cut them. */
+  std::vector<int> least_of(option.size(), 1);
+  int least_next = std::numeric_limits<int>::max();
+  for (size_t i = 0; i < option.size(); ++i) {
+    const BaseMove& row = base.move[static_cast<size_t>(option[i].row)];
+    least_of[i] = std::max(1, fewest_frames(row, cal, false));
+    least_next = std::min(least_next, least_of[i]);
+  }
+  const auto unlandable = [&](int depth, long long frames_at_least, int facing) {
+    if (lands.empty() || !question.drop_unlandable || lands[static_cast<size_t>(facing & 0xFFFF)]) {
+      return false;
+    }
+    return depth >= deepest || frames_at_least + least_next > question.frames;
+  };
+
   Node start;
   start.x = question.start_x;
   start.y = question.start_y;
@@ -1141,6 +1159,10 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
         was.cup_dir = here.cup_dir;
         Pose now;
         if (!model_step(o.seat, row.turn, o.steps, was, &now, &mid)) continue;
+        if (unlandable(child.depth, child.frames, now.facing)) {
+          ++count->unlandable;
+          continue;
+        }
         child.facing = now.facing;
         child.camera = now.camera;
         child.has_camera = now.has_camera;
@@ -1178,6 +1200,13 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
         if (!camera_clear(question.camera_clear, o.seat, o.taps, here, now)) {
           ++count->generated;
           ++count->camera_met;
+          continue;
+        }
+        if (unlandable(here.depth + 1,
+                       static_cast<long long>(here.frames) + least_of[oi] + now.frames,
+                       now.facing)) {
+          ++count->generated;
+          ++count->unlandable;
           continue;
         }
         const Stepped st =
@@ -1480,6 +1509,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
       a->dominance_kills += b.dominance_kills;
       a->left_corridor += b.left_corridor;
       a->outside_bounds += b.outside_bounds;
+      a->unlandable += b.unlandable;
       a->camera_met += b.camera_met;
       a->allowed += b.allowed;
       a->merged_orders += b.merged_orders;

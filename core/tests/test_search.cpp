@@ -5404,6 +5404,60 @@ void item_facing_tests() {
   ok(search::item_facings(him).empty() && search::item_facings(loose).empty() &&
          search::item_facings(free_both).empty(),
      "Link himself, a tolerance past zero or no axis asked leaves every facing open");
+
+  /* Dropping childless states the item cannot land from loses no plan. The target is the item's
+     X over a landing the model itself reaches, so the question has plans at all. */
+  const search::BaseTable base = search::base_table(false);
+  const search::Slab flat = search::slab(0.0, 0.0, 0.0, 8192.0);
+  const search::Corridor wide = search::corridor(0.0, 0.0, 0.0, 0.0, 2000.0);
+  const search::Selection sel = search::select(flat.mesh, wide);
+  search::Limits open;
+  open.slope_normal_y = 0.0;
+  open.height_step = 1e9;
+  open.normal_apart = 1e9;
+  const search::Grid grid = search::build(sel, wide, open);
+  const search::Calibration cal = search::Calibration::measured();
+  search::Question near;
+  near.aim = search::Aim::Overhead;
+  near.start_facing = 0x1234;
+  near.frames = 120;
+  near.tolerance = 40.0;
+  near.target.x = 0.5;
+  near.target.z = 60.0;
+  for (const char* id : {"crawl", "crawl_r", "dry_roll", "dry_roll_r", "fine_turn"}) {
+    near.moves.push_back(id);
+  }
+  const search::Found seed = search::search_tree(near, base, grid, sel, cal);
+  ok(!seed.candidate.empty(), "a loose question over flat ground has a landing to aim at");
+  if (seed.candidate.empty()) return;
+  /* Near X = 0 the float steps are fine, so the item's sum rules most facings out. */
+  search::Question exact = near;
+  exact.tolerance = 0.0;
+  exact.target.has_z = false;
+  long long open_facings = 65536;
+  for (const search::Candidate& at : seed.candidate) {
+    double ix = 0, iy = 0, iz = 0;
+    search::item_point(at.x, at.y, at.z, 0, at.facing, 0, &ix, &iy, &iz);
+    exact.target.x = static_cast<double>(static_cast<float>(ix));
+    open_facings = 0;
+    for (uint8_t one : search::item_facings(exact)) open_facings += one;
+    if (open_facings < 65536 / 2) break;
+  }
+  ok(open_facings < 65536 / 2, "one landing's item X rules most facings out");
+  /* A wide check range gives the near set a population; the facing filter still applies to it. */
+  exact.check_range = 1e5;
+  search::Question kept_all = exact;
+  kept_all.drop_unlandable = false;
+  const search::Found dropped = search::search_tree(exact, base, grid, sel, cal);
+  const search::Found every = search::search_tree(kept_all, base, grid, sel, cal);
+  std::set<std::vector<search::Edge>> a, b;
+  for (const search::Candidate& c : dropped.candidate) a.insert(c.path);
+  for (const search::Candidate& c : every.candidate) b.insert(c.path);
+  ok(!b.empty() && a == b && dropped.exhausted && every.exhausted,
+     "RED: the same exact question finds the same plans with childless unlandable states dropped "
+     "as without");
+  ok(dropped.count.unlandable > 0 && every.count.unlandable == 0,
+     "and it does drop some, so the check above compares two different walks");
 }
 
 int main() {
