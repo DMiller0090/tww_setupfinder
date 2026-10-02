@@ -3,6 +3,7 @@
  */
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,15 @@ double aim_reach(const struct Question& q);
 
 /** The aim's height above Link's feet: the held item's height in `daDitem_c::set_pos`, else 0. */
 double aim_lift(const struct Question& q);
+
+/** The held item's position, `daDitem_c::set_pos` line for line: the offset turned by Link's angle
+ *  x, facing and angle z, added to his position in f32. The one place the offset is applied. */
+void item_point(double x, double y, double z, int angle_x, int shape_y, int angle_z, double* ax,
+                double* ay, double* az);
+
+/** Per facing, whether some f32 Link position puts the item on the target's own f32. Asked only
+ *  aimed at the item at a tolerance of zero on a point or a line; empty means every facing can. */
+std::vector<uint8_t> item_facings(const struct Question& q);
 
 /** -1 when the first place is nearer (by distance, then gap), 1 when the second is, 0 on a tie. */
 int closeness(double distance_a, double gap_a, double distance_b, double gap_b);

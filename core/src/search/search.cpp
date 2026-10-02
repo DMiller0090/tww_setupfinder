@@ -18,6 +18,9 @@
 #include <unordered_map>
 
 #include "SSystem/SComponent/c_math.h"
+#include "engine/ps_mtx.h"
+#include "engine/session.h"
+#include "m_Do/m_Do_mtx.h"
 
 namespace search {
 
@@ -37,6 +40,65 @@ void aim_point(const Question& q, double x, double z, int facing, double* ax, do
   const double c = static_cast<double>(cM_scos(static_cast<s16>(facing & 0xFFFF)));
   *ax = x + c * kItemAcross + s * kItemAhead;
   *az = z + c * kItemAhead - s * kItemAcross;
+}
+
+namespace {
+
+/** Whether some f32 `l` makes the f32 sum `l + o` exactly `t`. That `l` is the float nearest
+ *  `t - o` or a step or two from it, so a few each side are tried. */
+bool sums_to(float t, float o) {
+  float l = static_cast<float>(static_cast<double>(t) - static_cast<double>(o));
+  for (int k = 0; k < 4; ++k) l = std::nextafter(l, -std::numeric_limits<float>::infinity());
+  for (int k = 0; k <= 8; ++k) {
+    const float sum = l + o;
+    if (std::memcmp(&sum, &t, sizeof sum) == 0) return true;
+    l = std::nextafter(l, std::numeric_limits<float>::infinity());
+  }
+  return false;
+}
+
+}  // namespace
+
+void item_point(double x, double y, double z, int angle_x, int shape_y, int angle_z, double* ax,
+                double* ay, double* az) {
+  Mtx turn;
+  mDoMtx_ZXYrotS(turn, static_cast<s16>(angle_x), static_cast<s16>(shape_y),
+                 static_cast<s16>(angle_z));
+  Vec offset = {static_cast<f32>(kItemAcross), static_cast<f32>(kItemUp),
+                static_cast<f32>(kItemAhead)};
+  PSMTXMultVec(turn, &offset, &offset);
+  *ax = static_cast<double>(static_cast<f32>(x) + offset.x);
+  *ay = static_cast<double>(static_cast<f32>(y) + offset.y);
+  *az = static_cast<double>(static_cast<f32>(z) + offset.z);
+}
+
+/* The item's coordinate is f32(Link's + offset's). Each is a multiple of its own float step, so
+   the sum lands on the finer of the two grids, and a target with a low bit set is out of reach
+   wherever both are coarse. Angle x and z are 0: only demos and moving floors write them (the
+   item gate holds that). */
+std::vector<uint8_t> item_facings(const Question& q) {
+  const Target& t = q.target;
+  if (q.aim != Aim::Overhead || q.tolerance != 0.0 || t.ranged || !t.list.empty() ||
+      t.mask.any() || (!t.has_x && !t.has_z)) {
+    return std::vector<uint8_t>();
+  }
+  /* `jmaSinTable` has no static initialiser. A session installs it once for all threads, so one
+     is built here rather than installing it beside the sessions other threads may be building. */
+  static std::once_flag sine_ready;
+  std::call_once(sine_ready, [] { tww_engine::Session installs; });
+  const float tx = static_cast<float>(t.x), tz = static_cast<float>(t.z);
+  std::vector<uint8_t> lands(65536, 0);
+  for (int f = 0; f < 65536; ++f) {
+    /* At Link's origin the item is its offset alone, since 0 + o is o. */
+    double ox = 0, oy = 0, oz = 0;
+    item_point(0.0, 0.0, 0.0, 0, f, 0, &ox, &oy, &oz);
+    lands[static_cast<size_t>(f)] =
+        (!t.has_x || sums_to(tx, static_cast<float>(ox))) &&
+                (!t.has_z || sums_to(tz, static_cast<float>(oz)))
+            ? 1
+            : 0;
+  }
+  return lands;
 }
 
 double aim_reach(const Question& q) {
@@ -679,6 +741,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
   found.unstepped = unstepped_for(question, base);
   found.rate = fastest_rate(base, rows, grid, &cal);
   found.slack = widest_slack(question, base, rows, cal, grid, found.rate);
+  const std::vector<uint8_t> lands = item_facings(question);
 
   /* The steps bound: with N steps left a state ends no nearer than its distance less N times the
      widest `travel_of`, less the item's swing; each step widens the recording test by at most
@@ -808,9 +871,11 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
   /* The near set: within `tolerance + consult`, wider than the tolerance so a model miss the
      engine would land inside is not lost. */
   struct Near {
-    static bool is(const Question& q, const Node& n, double d, bool* by_allowance) {
+    static bool is(const Question& q, const std::vector<uint8_t>& lands, const Node& n, double d,
+                   bool* by_allowance) {
       /* A filter, not a prune: the next move can still change the facing. */
-      if (!q.end_facing.holds(n.facing)) {
+      if (!q.end_facing.holds(n.facing) ||
+          (!lands.empty() && !lands[static_cast<size_t>(n.facing & 0xFFFF)])) {
         *by_allowance = false;
         return false;
       }
@@ -1260,7 +1325,19 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
       ++reap->next_id;
       into->child.push_back(child);
     }
-    std::sort(into->child.begin(), into->child.end(), Nearest::before);
+    if (lands.empty()) {
+      std::sort(into->child.begin(), into->child.end(), Nearest::before);
+    } else {
+      /* A child the engine will be asked about goes ahead of one whose facing cannot land the
+         item. */
+      std::sort(into->child.begin(), into->child.end(), [&](const Node& a, const Node& b) {
+        bool unused = false;
+        const bool na = Near::is(question, lands, a, a.distance, &unused);
+        const bool nb = Near::is(question, lands, b, b.distance, &unused);
+        if (na != nb) return na;
+        return Nearest::before(a, b);
+      });
+    }
   };
 
   /* One subtree, depth-first on one thread. At `stop_depth` a child becomes an `Item` instead of
@@ -1325,7 +1402,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
       /* Build the path only if something keeps it. The closest test is `<=`, not `<`, because
          `Closest::worse` can still prefer an equally distant state. */
       bool by_allowance = false;
-      const bool near = Near::is(question, child, child.distance, &by_allowance);
+      const bool near = Near::is(question, lands, child, child.distance, &by_allowance);
       /* Too short to record, but still listed below: a tie can splice it into a longer plan. */
       const bool short_of = child.depth < question.fewest || child.frames < question.least_frames;
       const bool could_be_closest =
@@ -1453,7 +1530,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
                                                   : question.target.distance(ax, az);
       }
       bool by_allowance = false;
-      if (question.fewest == 0 && question.least_frames <= 0 && Near::is(question, start, here.distance, &by_allowance)) {
+      if (question.fewest == 0 && question.least_frames <= 0 && Near::is(question, lands, start, here.distance, &by_allowance)) {
         if (by_allowance) ++prefix.count.allowed;
         if (handing != nullptr) (*handing)(here);
         prefix.raw.push_back(here);

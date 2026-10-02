@@ -22,21 +22,6 @@ double xz_distance(double x, double z, double tx, double tz) {
   return std::sqrt(dx * dx + dz * dz);
 }
 
-/** The held item's position, `daDitem_c::set_pos` line for line. */
-void item_point(double x, double y, double z, int angle_x, int shape_y, int angle_z, double* ax,
-                double* ay, double* az) {
-  Mtx turn;
-  mDoMtx_ZXYrotS(turn, static_cast<s16>(angle_x), static_cast<s16>(shape_y),
-                 static_cast<s16>(angle_z));
-  cXyz offset(30.0f, 140.0f, 20.0f);
-  PSMTXMultVec(turn, &offset, &offset);
-  cXyz pos(static_cast<f32>(x), static_cast<f32>(y), static_cast<f32>(z));
-  pos += offset;
-  *ax = static_cast<double>(pos.x);
-  *ay = static_cast<double>(pos.y);
-  *az = static_cast<double>(pos.z);
-}
-
 /** Named moves first; combos are built only for other ids. Facing and camera both change a move. */
 bool move_at(const std::string& id, int facing, const int* camera, Move* out) {
   const std::vector<Move> named = roster(facing, false, camera);

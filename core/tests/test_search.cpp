@@ -5343,6 +5343,69 @@ void crease_tests() {
      "RED: Y B8 alone keeps the place, a hair under the lowest floor");
 }
 
+/* Which facings can land the item on a target's own f32. */
+void item_facing_tests() {
+  search::Question q;
+  q.aim = search::Aim::Overhead;
+  q.tolerance = 0.0;
+  q.target.has_x = true;
+  q.target.x = static_cast<double>(-2.9293828f);
+  q.target.has_z = false;
+  const std::vector<uint8_t> lands = search::item_facings(q);
+  long long count = 0;
+  for (uint8_t one : lands) count += one;
+  ok(lands.size() == 65536, "an X held to its f32 by the item has a table over every facing");
+  ok(count == 9072,
+     "C03B7B02 (low bits 10) is in reach on 9072 facings: the solid bands and their patchy edges");
+  ok(lands[23000] == 1 && lands[54000] == 1,
+     "the offset lying along the line makes Link's own X small, and his fine steps reach it");
+  ok(lands[0] == 0 && lands[16384] == 0 && lands[50000] == 0,
+     "an offset 8 or more across leaves both sides on a 2^-20 grid, which ends in 0, 4, 8 or C");
+
+  /* Every facing, against every Link coordinate 64 float steps either side of the one the table
+     tries: the sum is monotonic in his coordinate, so a landing the table missed would be in that
+     window. Each target is one axis, at a spread of magnitudes. */
+  const float lines[] = {-2.9293828f, 0.3710937f, 3.0000002f, -57.15f, 1234.5671f, -200623.31f};
+  long long both_ways = 0, wrong = 0;
+  for (float line : lines) {
+    for (int axis = 0; axis < 2; ++axis) {
+      search::Question at = q;
+      at.target.has_x = axis == 0;
+      at.target.has_z = axis == 1;
+      at.target.x = at.target.z = static_cast<double>(line);
+      const std::vector<uint8_t> table = search::item_facings(at);
+      for (int f = 0; f < 65536; ++f) {
+        double ox = 0, oy = 0, oz = 0;
+        search::item_point(0.0, 0.0, 0.0, 0, f, 0, &ox, &oy, &oz);
+        const float o = static_cast<float>(axis == 0 ? ox : oz);
+        float l = static_cast<float>(static_cast<double>(line) - static_cast<double>(o));
+        for (int k = 0; k < 64; ++k) l = std::nextafter(l, -1e30f);
+        bool found = false;
+        for (int k = 0; k <= 128 && !found; ++k, l = std::nextafter(l, 1e30f)) {
+          double ax = 0, ay = 0, az = 0;
+          search::item_point(axis == 0 ? l : 0.0, 0.0, axis == 1 ? l : 0.0, 0, f, 0, &ax, &ay, &az);
+          if (static_cast<float>(axis == 0 ? ax : az) == line) found = true;
+        }
+        if (found != (table[static_cast<size_t>(f)] == 1)) ++wrong;
+        ++both_ways;
+      }
+    }
+  }
+  ok(both_ways == 12LL * 65536 && wrong == 0,
+     "RED: on six lines each way, a facing is in the table exactly when the game's own sum can put "
+     "the item on the line from some coordinate of his");
+
+  search::Question him = q;
+  him.aim = search::Aim::Player;
+  search::Question loose = q;
+  loose.tolerance = 1.0;
+  search::Question free_both = q;
+  free_both.target.has_x = false;
+  ok(search::item_facings(him).empty() && search::item_facings(loose).empty() &&
+         search::item_facings(free_both).empty(),
+     "Link himself, a tolerance past zero or no axis asked leaves every facing open");
+}
+
 int main() {
   {
     std::string why;
@@ -5360,6 +5423,11 @@ int main() {
   if (const char* only = std::getenv("SETUPCORE_ONLY")) {
     if (std::string(only) == "list") {
       list_tests();
+      std::printf("%s\n", failed == 0 ? "all checks passed" : "CHECKS FAILED");
+      return failed == 0 ? 0 : 1;
+    }
+    if (std::string(only) == "item") {
+      item_facing_tests();
       std::printf("%s\n", failed == 0 ? "all checks passed" : "CHECKS FAILED");
       return failed == 0 ? 0 : 1;
     }
@@ -5392,6 +5460,7 @@ int main() {
   target_tests();
   ground_tests();
   list_tests();
+  item_facing_tests();
   clipped_tests();
   mask_tests();
   within_tests();
