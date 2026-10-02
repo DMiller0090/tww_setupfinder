@@ -3,6 +3,7 @@
  * the goal, so the A* bound stays admissible. */
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -133,6 +134,28 @@ struct Target {
 
   /** The nearest point of the goal; a freed axis answers the place's own coordinate. */
   void nearest(double px, double pz, double* nx, double* nz) const;
+
+  /** The least `distance` from anywhere in an xz box to the goal; zero where they meet. */
+  double box_gap(double x_lo, double x_hi, double z_lo, double z_hi) const {
+    double tx_lo = x, tx_hi = x, tz_lo = z, tz_hi = z;
+    bool on_x = has_x, on_z = has_z;
+    if (ground.resolved) {
+      /* Every polygon is inside the index's box. */
+      tx_lo = ground.origin_x;
+      tx_hi = ground.origin_x + ground.cell * ground.nx;
+      tz_lo = ground.origin_z;
+      tz_hi = ground.origin_z + ground.cell * ground.nz;
+      on_x = on_z = true;
+    } else if (ranged) {
+      tx_lo = x0;
+      tx_hi = x1;
+      tz_lo = z0;
+      tz_hi = z1;
+    }
+    const double gx = on_x ? std::max(0.0, std::max(tx_lo - x_hi, x_lo - tx_hi)) : 0.0;
+    const double gz = on_z ? std::max(0.0, std::max(tz_lo - z_hi, z_lo - tz_hi)) : 0.0;
+    return std::sqrt(gx * gx + gz * gz);
+  }
 
   /** A cheap lower bound on `distance`, for pruning; inline because the walk calls it per state. */
   double bound(double px, double pz) const {

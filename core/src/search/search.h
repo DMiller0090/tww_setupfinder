@@ -239,9 +239,11 @@ double fastest_rate(const BaseTable& base, const std::vector<int>& rows, const G
                     const Calibration* cal = nullptr);
 
 /** An upper bound on how far one move can carry Link in xz on this room; both distance bounds
- *  rest on it. `steepest` is `ground_steepest`. */
+ *  rest on it. `steepest` is `ground_steepest`. `box`, when given, gets every end the model can
+ *  give the move as ahead and side ranges about its entry facing: least ahead, most ahead, least
+ *  side, most side. */
 double travel_of(const BaseMove& row, double drop, const MoveCal* mc, const PlaneTable* pt,
-                 double steepest);
+                 double steepest, double* box = nullptr);
 double ground_drop(const Grid& grid);
 double ground_steepest(const Grid& grid);
 

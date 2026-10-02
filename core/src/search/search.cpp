@@ -559,7 +559,7 @@ double ground_steepest(const Grid& grid) {
 }
 
 double travel_of(const BaseMove& row, double drop, const MoveCal* mc, const PlaneTable* pt,
-                 double steepest) {
+                 double steepest, double* box) {
   /* Each grounded frame's `speedF` part is scaled somewhere in [least, most] by the ground, and
      each air frame is flown or not; the end's distance is bounded by the furthest that set reaches
      over sampled directions, plus `length * kStep` for what the sampling can miss. The level reach
@@ -656,12 +656,25 @@ double travel_of(const BaseMove& row, double drop, const MoveCal* mc, const Plan
   travel += length * kStep;
   travel = std::max(travel, row.reach);
 
+  /* Each part at whichever end of its range moves the end furthest along each axis. */
+  double a_lo = fixed_ahead, a_hi = fixed_ahead, s_lo = fixed_side, s_hi = fixed_side;
+  for (size_t i = 0; i < part_a.size(); ++i) {
+    a_lo += std::min(part_least[i] * part_a[i], part_most[i] * part_a[i]);
+    a_hi += std::max(part_least[i] * part_a[i], part_most[i] * part_a[i]);
+    s_lo += std::min(part_least[i] * part_s[i], part_most[i] * part_s[i]);
+    s_hi += std::max(part_least[i] * part_s[i], part_most[i] * part_s[i]);
+  }
+
   /* A tabled end is a convex mix of nodes, so no further than its furthest node. */
   if (pt != nullptr) {
     for (size_t i = 0; i < pt->ahead.size() && i < pt->side.size(); ++i) {
       if (i < pt->key.size() && pt->key[i] == 255) continue;
-      travel = std::max(travel, std::hypot(static_cast<double>(pt->ahead[i]),
-                                           static_cast<double>(pt->side[i])));
+      const double a = static_cast<double>(pt->ahead[i]), s = static_cast<double>(pt->side[i]);
+      travel = std::max(travel, std::hypot(a, s));
+      a_lo = std::min(a_lo, a);
+      a_hi = std::max(a_hi, a);
+      s_lo = std::min(s_lo, s);
+      s_hi = std::max(s_hi, s);
     }
   }
 
@@ -675,6 +688,18 @@ double travel_of(const BaseMove& row, double drop, const MoveCal* mc, const Plan
     }
     const double extra = std::sqrt(2.0 * drop / -row.gravity);
     travel += air_speed * extra;
+    a_lo -= air_speed * extra;
+    a_hi += air_speed * extra;
+    s_lo -= air_speed * extra;
+    s_hi += air_speed * extra;
+  }
+  if (box != nullptr) {
+    /* The model sums its frames in double; this is far past what that can move the end. */
+    const double kSlack = 1e-6;
+    box[0] = a_lo - kSlack;
+    box[1] = a_hi + kSlack;
+    box[2] = s_lo - kSlack;
+    box[3] = s_hi + kSlack;
   }
   return travel;
 }
@@ -889,12 +914,15 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
   const double bytes_scale = 1.0 + steepest;
   double step_travel = 0.0, step_charge = 0.0;
   std::map<int, double> row_travel;
+  std::map<int, std::vector<double> > row_box;
   for (size_t i = 0; i < rows.size(); ++i) {
     const BaseMove& row = base.move[static_cast<size_t>(rows[i])];
     const MoveCal* mc = cal.of(row.id);
     const PlaneTable* pt = cal.plane_of(row.id);
-    const double travel = travel_of(row, drop, mc, pt, steepest);
+    std::vector<double> box(4, 0.0);
+    const double travel = travel_of(row, drop, mc, pt, steepest, box.data());
     row_travel[rows[i]] = travel;
+    row_box[rows[i]] = box;
     step_travel = std::max(step_travel, travel);
     step_charge = std::max(step_charge, charge_of(mc, pt, 1 << 20, false));
     if (pt != nullptr) step_charge = std::max(step_charge, pt->worst);
@@ -942,6 +970,8 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     double charge;
     /* The row group the profile counts it under. */
     profile::Row group;
+    /* Every end the model can give the move, about its entry facing (`travel_of`). */
+    double box[4];
   };
   std::vector<Option> option;
   int cheapest_move = 0;
@@ -962,6 +992,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
         o.charge = 0.0;
         o.taps = 0;
         o.group = profile::kTurn;
+        for (double& side : o.box) side = 0.0;
         option.push_back(o);
       }
       const int price = row.frames > 0 ? row.frames : 1;
@@ -975,6 +1006,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     o.mc = cal.of(row.id);
     o.pt = cal.plane_of(row.id);
     o.travel = row_travel[rows[r]];
+    for (int k = 0; k < 4; ++k) o.box[k] = row_box[rows[r]][static_cast<size_t>(k)];
     o.charge = std::max(charge_of(o.mc, o.pt, 1 << 20, false), o.pt != nullptr ? o.pt->worst : 0.0) +
                step_floor;
     o.taps = 0;
@@ -1425,17 +1457,8 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
         }
         child_time.start(profile::kTurnChild, false);
         ++count->generated;
-        child = here;
-        child.move_handed = false;
-        child.move_threshold = 0;
-        child.move_floor = 0;
-        child.edge.row = o.row;
-        child.edge.steps = o.steps;
-        /* Overwrite: the copied edge may carry an L chain's taps. */
-        child.edge.taps = o.taps;
-        child.depth = here.depth + 1;
         const int steps = o.steps < 0 ? -o.steps : o.steps;
-        child.frames = here.frames + (row.frames - 1) + steps;
+        const int frames = here.frames + (row.frames - 1) + steps;
         Pose was;
         was.facing = here.facing;
         was.camera = here.camera;
@@ -1446,11 +1469,27 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
           fated(profile::kCannot);
           continue;
         }
-        if (unlandable(child.depth, child.frames, now.facing)) {
+        if (unlandable(here.depth + 1, frames, now.facing)) {
           ++count->unlandable;
           fated(profile::kUnlandable);
           continue;
         }
+        /* Most turn children end here, so the state is copied only for the rest. */
+        if (frames > question.frames) {
+          ++count->bound_pruned;
+          fated(profile::kOverFrames);
+          continue;
+        }
+        child = here;
+        child.move_handed = false;
+        child.move_threshold = 0;
+        child.move_floor = 0;
+        child.edge.row = o.row;
+        child.edge.steps = o.steps;
+        /* Overwrite: the copied edge may carry an L chain's taps. */
+        child.edge.taps = o.taps;
+        child.depth = here.depth + 1;
+        child.frames = frames;
         child.facing = now.facing;
         child.camera = now.camera;
         child.has_camera = now.has_camera;
@@ -1505,6 +1544,35 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
           ++count->unlandable;
           fated(profile::kUnlandable);
           continue;
+        }
+        /* A last move whose every end leaves the aim past the near band and past the closest is
+           not stepped: the steps bound with none left, along the move's own direction. */
+        if (question.distance_bound && beaten < std::numeric_limits<double>::infinity() &&
+            !question.target.mask.any() &&
+            (here.depth + 1 >= deepest ||
+             static_cast<long long>(here.frames) + least_of[oi] + now.frames + least_next >
+                 question.frames)) {
+          const double sin_f = static_cast<double>(cM_ssin(static_cast<s16>(here.facing)));
+          const double cos_f = static_cast<double>(cM_scos(static_cast<s16>(here.facing)));
+          const double* b = o.box;
+          const double dx_lo = std::min(b[0] * sin_f, b[1] * sin_f) +
+                               std::min(b[2] * cos_f, b[3] * cos_f);
+          const double dx_hi = std::max(b[0] * sin_f, b[1] * sin_f) +
+                               std::max(b[2] * cos_f, b[3] * cos_f);
+          const double dz_lo = std::min(b[0] * cos_f, b[1] * cos_f) +
+                               std::min(-b[2] * sin_f, -b[3] * sin_f);
+          const double dz_hi = std::max(b[0] * cos_f, b[1] * cos_f) +
+                               std::max(-b[2] * sin_f, -b[3] * sin_f);
+          double ox = 0.0, oz = 0.0;
+          if (!question.target.from_feet) aim_point(question, 0.0, 0.0, now.facing, &ox, &oz);
+          const double gap =
+              question.target.box_gap(here.x + dx_lo + ox, here.x + dx_hi + ox,
+                                      here.z + dz_lo + oz, here.z + dz_hi + oz);
+          if (gap > question.tolerance + here.consult + o.charge && gap > beaten) {
+            ++count->steps_pruned;
+            fated(profile::kStepsCut);
+            continue;
+          }
         }
         Stepped st;
         {
