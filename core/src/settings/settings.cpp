@@ -1,11 +1,19 @@
 #include "settings.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <system_error>
+#include <thread>
+
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace settings {
 namespace {
@@ -96,8 +104,15 @@ bool write(const std::string& json, std::string* why) {
     return false;
   }
 
-  // Write beside, then rename over, so a kill mid-write leaves the old file.
-  const std::filesystem::path beside = file.parent_path() / (std::string(kFile) + ".new");
+  // Write beside, then rename over, so a kill mid-write leaves the old file. Beside is this
+  // process's own, so two windows saving at once never write one file.
+#if defined(_WIN32)
+  const long pid = ::_getpid();
+#else
+  const long pid = static_cast<long>(::getpid());
+#endif
+  const std::filesystem::path beside =
+      file.parent_path() / (std::string(kFile) + "." + std::to_string(pid) + ".new");
   {
     std::ofstream out(beside, std::ios::binary | std::ios::trunc);
     if (!out) {
@@ -111,7 +126,12 @@ bool write(const std::string& json, std::string* why) {
       return false;
     }
   }
-  std::filesystem::rename(beside, file, ec);
+  // A rename fails for an instant while another window replaces the same file.
+  for (int tries = 0; tries < 50; ++tries) {
+    std::filesystem::rename(beside, file, ec);
+    if (!ec) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
   if (ec) {
     // Some Windows filesystems refuse a rename over an existing file.
     std::filesystem::copy_file(beside, file,
