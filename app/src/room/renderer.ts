@@ -448,7 +448,8 @@ export function mount(host: HTMLElement, onPoint: (p: Point | null) => void = ()
   const onKeyDown = (e: KeyboardEvent): void => {
     /* Before the guard: Shift alone is a keydown too. */
     sliding = e.shiftKey;
-    const k = e.key.toLowerCase();
+    /* An autofill pick or an IME composition sends a key event with no `key`. */
+    const k = (e.key ?? '').toLowerCase();
     if (!(k in WAY) || e.ctrlKey || e.metaKey || e.altKey) return;
     /* The loop was asleep, so the waking frame must not measure a step. */
     if (!held.size) last = 0;
@@ -458,7 +459,7 @@ export function mount(host: HTMLElement, onPoint: (p: Point | null) => void = ()
   };
   const onKeyUp = (e: KeyboardEvent): void => {
     sliding = e.shiftKey;
-    held.delete(e.key.toLowerCase());
+    held.delete((e.key ?? '').toLowerCase());
   };
   /* A key held while focus leaves never reports its release. */
   const dropKeys = (): void => held.clear();
