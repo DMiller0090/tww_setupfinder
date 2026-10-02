@@ -589,6 +589,19 @@ export function buildGround(gm: GroundMark): THREE.Group {
   return g;
 }
 
+/** The floor point under the cursor: a ring and a dot at radius 1, laid flat in the XY plane.
+ *  The renderer turns it onto the floor triangle and sizes it in screen pixels. */
+export function buildCursor(): THREE.Group {
+  const c = colour('--muted');
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(new THREE.RingGeometry(0.72, 1, 40), fillMat(c, 0.9)));
+  g.add(new THREE.Mesh(new THREE.CircleGeometry(0.16, 16), fillMat(c, 0.9)));
+  g.add(new THREE.Mesh(new THREE.CircleGeometry(0.72, 40), fillMat(c, 0.15)));
+  g.renderOrder = 10;
+  g.traverse(o => { o.renderOrder = 10; });
+  return g;
+}
+
 /** Disposes every geometry and material in a group. */
 export function release(g: THREE.Group): void {
   g.traverse((o: THREE.Object3D) => {

@@ -3,7 +3,7 @@
  */
 import * as THREE from 'three';
 import {KINDS, type Kind} from '../core/fixtures';
-import {build, buildGround, release, type GroundMark, type Marks} from './marks';
+import {build, buildCursor, buildGround, release, type GroundMark, type Marks} from './marks';
 
 const COLOUR: Record<Kind, number> = {ground: 0x2f4f6f, wall: 0x3d3f52, roof: 0x4a3550};
 const EDGE: Record<Kind, number> = {ground: 0x7fb2e5, wall: 0x9aa0c0, roof: 0xbb8fd0};
@@ -133,6 +133,12 @@ export function mount(host: HTMLElement, onPoint: (p: Point | null) => void = ()
   const orbit = {yaw: home.yaw, tilt: home.tilt, dist: 3000, target: new THREE.Vector3()};
   let framed = {dist: 3000, target: new THREE.Vector3()};
 
+  /* The floor point under the cursor, laid on its triangle; radius in screen pixels. */
+  const CURSOR_PX = 11.25;
+  const cursor = buildCursor();
+  cursor.visible = false;
+  scene.add(cursor);
+
   /* Rescales marks carrying `userData.px` to that many screen pixels. */
   const world = new THREE.Vector3();
   function sizeMarks(): void {
@@ -145,6 +151,12 @@ export function mount(host: HTMLElement, onPoint: (p: Point | null) => void = ()
       o.scale.setScalar(px * perPixel * camera.position.distanceTo(o.getWorldPosition(world)));
     });
   }
+  function sizeCursor(): void {
+    if (!cursor.visible) return;
+    const h = renderer.domElement.clientHeight || 1;
+    const perPixel = (2 * Math.tan((camera.fov * Math.PI) / 360)) / h;
+    cursor.scale.setScalar(CURSOR_PX * perPixel * camera.position.distanceTo(cursor.position));
+  }
 
   function place(): void {
     const cy = Math.cos(orbit.tilt), sy = Math.sin(orbit.tilt);
@@ -154,6 +166,7 @@ export function mount(host: HTMLElement, onPoint: (p: Point | null) => void = ()
       orbit.target.z + Math.cos(orbit.yaw) * cy * orbit.dist);
     camera.lookAt(orbit.target);
     sizeMarks();
+    sizeCursor();
     onCam({yaw: Math.round((orbit.yaw * 180) / Math.PI), zoom: framed.dist / orbit.dist});
     draw();
   }
@@ -219,6 +232,7 @@ export function mount(host: HTMLElement, onPoint: (p: Point | null) => void = ()
 
     scene.remove(group);
     floor = null;
+    cursor.visible = false;
     group.traverse((o: THREE.Object3D) => {
       const m = o as THREE.Mesh;
       if (m.geometry) m.geometry.dispose();
@@ -315,19 +329,45 @@ export function mount(host: HTMLElement, onPoint: (p: Point | null) => void = ()
   /* The nearest floor hit under the cursor: what is drawn, not the game's ground test. */
   const ray = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
-  function floorAt(e: MouseEvent): Point | null {
+  function hitAt(e: MouseEvent): THREE.Intersection | null {
     if (!floor) return null;
     const box = canvas.getBoundingClientRect();
     if (!box.width || !box.height) return null;
     ndc.set(((e.clientX - box.left) / box.width) * 2 - 1,
             -((e.clientY - box.top) / box.height) * 2 + 1);
     ray.setFromCamera(ndc, camera);
-    const hit = ray.intersectObject(floor, false)[0];
+    return ray.intersectObject(floor, false)[0] ?? null;
+  }
+  function toPoint(hit: THREE.Intersection | null, e: MouseEvent): Point | null {
     if (!hit) return null;
+    const box = canvas.getBoundingClientRect();
     const p = hit.point;
     return {x: p.x, y: p.y, z: p.z, px: e.clientX - box.left, py: e.clientY - box.top};
   }
-  const dropPoint = (): void => onPoint(null);
+  const floorAt = (e: MouseEvent): Point | null => toPoint(hitAt(e), e);
+
+  /* The floor mesh is untransformed, so a face normal is already in world space. */
+  const FACE = new THREE.Vector3(0, 0, 1);
+  const normal = new THREE.Vector3();
+  function hover(e: PointerEvent): void {
+    const hit = hitAt(e);
+    onPoint(toPoint(hit, e));
+    if (!hit) { hideCursor(); return; }
+    normal.copy(hit.face ? hit.face.normal : UP);
+    /* A floor seen from below still lays the ring facing the camera's side. */
+    if (normal.dot(ray.ray.direction) > 0) normal.negate();
+    cursor.quaternion.setFromUnitVectors(FACE, normal);
+    cursor.position.copy(hit.point);
+    cursor.visible = true;
+    sizeCursor();
+    draw();
+  }
+  function hideCursor(): void {
+    if (!cursor.visible) return;
+    cursor.visible = false;
+    draw();
+  }
+  const dropPoint = (): void => { onPoint(null); hideCursor(); };
 
   const DOWN = new THREE.Vector3(0, -1, 0);
   const from = new THREE.Vector3();
@@ -349,7 +389,7 @@ export function mount(host: HTMLElement, onPoint: (p: Point | null) => void = ()
     canvas.setPointerCapture(e.pointerId);
   };
   const onMove = (e: PointerEvent) => {
-    if (!dragging) { onPoint(floorAt(e)); return; }
+    if (!dragging) { hover(e); return; }
     dropPoint();
     orbit.yaw += (e.clientX - dragging.x) * 0.006;
     orbit.tilt = Math.min(1.5, Math.max(-1.5, orbit.tilt + (e.clientY - dragging.y) * 0.004));
@@ -493,6 +533,8 @@ export function mount(host: HTMLElement, onPoint: (p: Point | null) => void = ()
       });
       if (marked) { scene.remove(marked); release(marked); marked = null; }
       if (region) { scene.remove(region); release(region); region = null; }
+      scene.remove(cursor);
+      release(cursor);
       renderer.dispose();
       canvas.remove();
     },
