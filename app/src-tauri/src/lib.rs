@@ -4,6 +4,12 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  let mut context = tauri::generate_context!();
+  /* `npm run app` names this window's own dev server, so every window runs one build. */
+  let dev_url = std::env::var("SETUP_FINDER_DEV_URL").ok().filter(|_| cfg!(dev));
+  if let Some(url) = dev_url.and_then(|url| url.parse().ok()) {
+    context.config_mut().build.dev_url = Some(url);
+  }
   tauri::Builder::default()
     /* Native file dialog: a WebView file input gives only a filename, not a path. */
     .plugin(tauri_plugin_dialog::init())
@@ -27,6 +33,6 @@ pub fn run() {
       }
       Ok(())
     })
-    .run(tauri::generate_context!())
+    .run(context)
     .expect("error while running tauri application");
 }
