@@ -7,6 +7,9 @@
 #include <map>
 #include <mutex>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -33,6 +36,7 @@
 #include "../src/search/corridor.h"
 #include "../src/search/dzb.h"
 #include "../src/search/grid.h"
+#include "../src/search/profile.h"
 #include "../src/search/search.h"
 #include "../src/search/verify.h"
 #include "d/d_camera.h"
@@ -5460,6 +5464,274 @@ void item_facing_tests() {
      "and it does drop some, so the check above compares two different walks");
 }
 
+/* The profile is a developer's view of a search, switched on by a file, and changes nothing. */
+void profile_tests() {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  const fs::path dir = fs::temp_directory_path(ec) / "setupcore_profile_test";
+  fs::remove_all(dir, ec);
+  fs::create_directories(dir, ec);
+  ok(!profile::begin_if_asked(dir.string()) && !profile::on() && !fs::exists(dir / "profile.json"),
+     "RED: with no profile.on in the folder nothing is profiled and nothing is written");
+
+  const search::BaseTable base = search::base_table(false);
+  const search::Slab flat = search::slab(0.0, 0.0, 0.0, 8192.0);
+  const search::Corridor wide = search::corridor(0.0, 0.0, 0.0, 0.0, 2000.0);
+  const search::Selection sel = search::select(flat.mesh, wide);
+  search::Limits open;
+  open.slope_normal_y = 0.0;
+  open.height_step = 1e9;
+  open.normal_apart = 1e9;
+  const search::Grid grid = search::build(sel, wide, open);
+  const search::Calibration cal = search::Calibration::measured();
+  search::Question q;
+  q.start_facing = 0x1234;
+  q.frames = 150;
+  q.steps = 5;
+  q.tolerance = 5.0;
+  /* Where one roll from the start lands, so the question has plans to compare. */
+  const double turned = 0x1234 * 2.0 * 3.14159265358979323846 / 65536.0;
+  q.target.x = 90.0 * std::sin(turned);
+  q.target.z = 90.0 * std::cos(turned);
+  q.cores = 4;
+  for (const char* id : {"crawl", "dry_roll", "dry_roll_r", "fine_turn"}) q.moves.push_back(id);
+
+  const search::Found plain = search::search_tree(q, base, grid, sel, cal);
+  {
+    std::ofstream(dir / "profile.on") << "\n";
+  }
+  const bool began = profile::begin_if_asked(dir.string());
+  ok(began && profile::on(), "with profile.on in the folder the search is profiled");
+  const search::Found profiled = search::search_tree(q, base, grid, sel, cal);
+  profile::end();
+  ok(!profile::on(), "and once it ends nothing more is timed");
+
+  bool same = plain.candidate.size() == profiled.candidate.size() &&
+              plain.closest.size() == profiled.closest.size() &&
+              plain.exhausted == profiled.exhausted;
+  for (size_t i = 0; same && i < plain.candidate.size(); ++i) {
+    const search::Candidate& a = plain.candidate[i];
+    const search::Candidate& b = profiled.candidate[i];
+    same = a.path == b.path && a.frames == b.frames && a.distance == b.distance && a.x == b.x &&
+           a.y == b.y && a.z == b.z && a.facing == b.facing;
+  }
+  for (size_t i = 0; same && i < plain.closest.size(); ++i) {
+    same = plain.closest[i].path == profiled.closest[i].path &&
+           plain.closest[i].distance == profiled.closest[i].distance;
+  }
+  const search::Counters& a = plain.count;
+  const search::Counters& b = profiled.count;
+  same = same && a.generated == b.generated && a.expanded == b.expanded &&
+         a.bound_pruned == b.bound_pruned && a.steps_pruned == b.steps_pruned &&
+         a.dominance_kills == b.dominance_kills && a.unlandable == b.unlandable &&
+         a.key_collapses == b.key_collapses;
+  ok(!plain.candidate.empty() && same,
+     "RED: a profiled search answers the same plans and closest, and walks the same tree");
+
+  std::string text;
+  {
+    std::ifstream in(dir / "profile.json", std::ios::binary);
+    std::ostringstream all;
+    all << in.rdbuf();
+    text = all.str();
+  }
+  const seam::Json read = seam::parse(text);
+  const seam::Json& expand = read.at("stages").at("expand");
+  long long kept = 0;
+  for (const char* group : {"move", "turn", "exit", "ess"}) {
+    kept += static_cast<long long>(read.at("children").at(group).at("kept").as_num());
+  }
+  ok(read.ok() && !read.at("running").as_bool(true) && expand.at("calls").as_num() > 0 &&
+         expand.at("seconds").as_num() > 0 && kept > 0,
+     "the file it leaves parses, says the run is over, and saw the expansions and the children");
+  fs::remove_all(dir, ec);
+}
+
+/* Aiming a plan's remaining moves from where the engine put Link, before driving them, confirms the
+   same plans and drives fewer. */
+void reaim_tests() {
+  const search::BaseTable base = search::base_table(false);
+  const search::Slab flat = search::slab(0.0, 0.0, 0.0, 8192.0);
+  const search::Corridor wide = search::corridor(0.0, 0.0, 0.0, 0.0, 2000.0);
+  const search::Selection sel = search::select(flat.mesh, wide);
+  search::Limits open;
+  open.slope_normal_y = 0.0;
+  open.height_step = 1e9;
+  open.normal_apart = 1e9;
+  const search::Grid grid = search::build(sel, wide, open);
+  const search::Calibration cal = search::Calibration::measured();
+  search::Question q;
+  q.start_facing = 0x1234;
+  q.frames = 150;
+  q.steps = 4;
+  q.tolerance = 1.0;
+  /* Two rolls along the start's facing, so plans land on and around it. */
+  const double turned = 0x1234 * 2.0 * 3.14159265358979323846 / 65536.0;
+  q.target.x = 180.0 * std::sin(turned);
+  q.target.z = 180.0 * std::cos(turned);
+  /* A band of a few units a move, so the near set holds plans only the whole path's band admits. */
+  q.check_range = 2e4;
+  for (const char* id : {"crawl", "dry_roll", "dry_roll_r", "fine_turn"}) q.moves.push_back(id);
+  const search::Found run = search::search_tree(q, base, grid, sel, cal);
+  const search::Model model = search::model_for(base, grid, sel, cal);
+
+  search::remember_drives(true);
+  const search::Verified every = search::verify(run, q, base, &flat.room);
+  search::remember_drives(true);
+  const search::Verified aimed = search::verify(run, q, base, &flat.room, nullptr, &model);
+  search::remember_drives(true);
+
+  std::set<std::vector<search::Edge>> a, b;
+  for (size_t i : every.answer) a.insert(every.consult[i].path);
+  for (size_t i : aimed.answer) b.insert(aimed.consult[i].path);
+  ok(!a.empty() && a == b,
+     "RED: aimed from the engine's own place before each drive, the same plans are confirmed");
+  ok(aimed.count.consults < every.count.consults,
+     "and fewer are driven, so the check above compares two different verifications");
+
+  /* On a slope the model is off by up to each move's measured error. Two rolls aimed at the float
+     the engine lands them on are near only by that allowance, and the aimed check must keep
+     them. */
+  const search::Slab tilted = search::slab(0.0, 0.0, 0.08, 8192.0);
+  const search::Corridor along = search::corridor(0.0, 0.0, 0.0, 1200.0, 900.0);
+  const search::Selection tilted_sel = search::select(tilted.mesh, along);
+  const search::Grid tilted_grid = search::build(tilted_sel, along, open);
+  const search::Model tilted_model = search::model_for(base, tilted_grid, tilted_sel, cal);
+  int roll = -1;
+  for (size_t i = 0; i < base.move.size(); ++i) {
+    if (base.move[i].id == "dry_roll") roll = static_cast<int>(i);
+  }
+  search::Question slope;
+  slope.frames = 200;
+  slope.steps = 2;
+  slope.tolerance = 0.0;
+  slope.moves.push_back("dry_roll");
+  slope.moves.push_back("crawl");
+  search::Found two;
+  search::Candidate twice;
+  search::Edge one_roll;
+  one_roll.row = roll;
+  twice.path.push_back(one_roll);
+  twice.path.push_back(one_roll);
+  two.candidate.push_back(twice);
+  search::remember_drives(true);
+  const search::Verified landed = search::verify(two, slope, base, &tilted.room);
+  ok(roll >= 0 && landed.consult.size() == 1 && landed.consult[0].drives == 2,
+     "the engine runs two rolls up the slope");
+  if (landed.consult.size() != 1) return;
+  slope.target.x = static_cast<double>(static_cast<float>(landed.consult[0].x));
+  slope.target.z = static_cast<double>(static_cast<float>(landed.consult[0].z));
+  const search::Found near = search::search_tree(slope, base, tilted_grid, tilted_sel, cal);
+  search::remember_drives(true);
+  const search::Verified plain = search::verify(near, slope, base, &tilted.room);
+  search::remember_drives(true);
+  const search::Verified sloped = search::verify(near, slope, base, &tilted.room, nullptr,
+                                                 &tilted_model);
+  search::remember_drives(true);
+  bool rolled = false;
+  std::set<std::vector<search::Edge>> c, d;
+  for (size_t i : plain.answer) c.insert(plain.consult[i].path);
+  for (size_t i : sloped.answer) {
+    d.insert(sloped.consult[i].path);
+    if (sloped.consult[i].path == twice.path) rolled = true;
+  }
+  bool off_by_the_model = false;
+  for (const search::Candidate& one : near.candidate) {
+    if (one.path == twice.path && one.distance > 0.0) off_by_the_model = true;
+  }
+  ok(off_by_the_model && rolled && c == d,
+     "RED: two rolls the model puts off the float, aimed from the engine's own place after the "
+     "first, are still driven and confirmed");
+}
+
+/* A run stopped, kept and carried on answers what one run straight through does (`D13` across a
+   pause), whatever the thread count of either half. */
+void checkpoint_tests() {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  const fs::path dir = fs::temp_directory_path(ec) / "setupcore_checkpoint_test";
+  fs::remove_all(dir, ec);
+  fs::create_directories(dir, ec);
+
+  const search::BaseTable base = search::base_table(false);
+  const search::Slab flat = search::slab(0.0, 0.0, 0.0, 8192.0);
+  const search::Corridor wide = search::corridor(0.0, 0.0, 0.0, 0.0, 2000.0);
+  const search::Selection sel = search::select(flat.mesh, wide);
+  search::Limits open;
+  open.slope_normal_y = 0.0;
+  open.height_step = 1e9;
+  open.normal_apart = 1e9;
+  const search::Grid grid = search::build(sel, wide, open);
+  const search::Calibration cal = search::Calibration::measured();
+  search::Question q;
+  q.start_facing = 0x1234;
+  q.frames = 260;
+  q.steps = 6;
+  q.tolerance = 3.0;
+  q.target.x = 40.0;
+  q.target.z = 150.0;
+  q.cores = 4;
+  for (const char* id : {"crawl", "dry_roll", "dry_roll_r", "fine_turn"}) q.moves.push_back(id);
+
+  /* Stops the run once it has generated `at` states; zero never stops it. */
+  struct Stopping : search::Watching {
+    long long at = 0;
+    bool walked(const search::Counters& count, int, size_t) {
+      return at == 0 || count.generated < at;
+    }
+  };
+  Stopping never;
+  const search::Found straight = search::search_tree(q, base, grid, sel, cal, nullptr, &never);
+
+  Stopping part;
+  part.at = straight.count.generated / 3;
+  search::Pausing keep;
+  keep.save = (dir / "kept").string();
+  keep.identity = "this question";
+  fs::create_directories(keep.save, ec);
+  const search::Found stopped = search::search_tree(q, base, grid, sel, cal, nullptr, &part, &keep);
+  ok(keep.saved && !stopped.exhausted && stopped.count.generated < straight.count.generated,
+     "a run stopped a third of the way through is kept, and is not a whole run");
+
+  search::Question fewer = q;
+  fewer.cores = 2;
+  search::Pausing carry;
+  carry.resume = keep.save;
+  carry.identity = "this question";
+  const search::Found resumed =
+      search::search_tree(fewer, base, grid, sel, cal, nullptr, &never, &carry);
+  bool same = carry.refused.empty() && resumed.candidate.size() == straight.candidate.size() &&
+              resumed.closest.size() == straight.closest.size() &&
+              resumed.exhausted == straight.exhausted;
+  for (size_t i = 0; same && i < straight.candidate.size(); ++i) {
+    const search::Candidate& a = straight.candidate[i];
+    const search::Candidate& b = resumed.candidate[i];
+    same = a.path == b.path && a.frames == b.frames && a.distance == b.distance && a.x == b.x &&
+           a.y == b.y && a.z == b.z && a.facing == b.facing;
+  }
+  for (size_t i = 0; same && i < straight.closest.size(); ++i) {
+    same = straight.closest[i].path == resumed.closest[i].path &&
+           straight.closest[i].distance == resumed.closest[i].distance;
+  }
+  const search::Counters& a = straight.count;
+  const search::Counters& b = resumed.count;
+  ok(!straight.candidate.empty() && same && a.generated == b.generated &&
+         a.expanded == b.expanded && a.bound_pruned == b.bound_pruned &&
+         a.steps_pruned == b.steps_pruned && a.dominance_kills == b.dominance_kills &&
+         a.key_collapses == b.key_collapses && a.merged_orders == b.merged_orders,
+     "RED: carried on from where it stopped, on another thread count, it answers the same plans "
+     "and closest and walks the same tree as one run straight through");
+
+  search::Pausing other;
+  other.resume = keep.save;
+  other.identity = "another question";
+  const search::Found refused =
+      search::search_tree(q, base, grid, sel, cal, nullptr, &never, &other);
+  ok(!other.refused.empty() && !refused.exhausted && refused.candidate.empty(),
+     "RED: a kept run is never carried on as another question");
+  fs::remove_all(dir, ec);
+}
+
 int main() {
   {
     std::string why;
@@ -5477,6 +5749,28 @@ int main() {
   if (const char* only = std::getenv("SETUPCORE_ONLY")) {
     if (std::string(only) == "list") {
       list_tests();
+      std::printf("%s\n", failed == 0 ? "all checks passed" : "CHECKS FAILED");
+      return failed == 0 ? 0 : 1;
+    }
+    if (std::string(only) == "exits") {
+      cup_exit_tests();
+      exits_at_tests();
+      l_chain_tests();
+      std::printf("%s\n", failed == 0 ? "all checks passed" : "CHECKS FAILED");
+      return failed == 0 ? 0 : 1;
+    }
+    if (std::string(only) == "reaim") {
+      reaim_tests();
+      std::printf("%s\n", failed == 0 ? "all checks passed" : "CHECKS FAILED");
+      return failed == 0 ? 0 : 1;
+    }
+    if (std::string(only) == "checkpoint") {
+      checkpoint_tests();
+      std::printf("%s\n", failed == 0 ? "all checks passed" : "CHECKS FAILED");
+      return failed == 0 ? 0 : 1;
+    }
+    if (std::string(only) == "profile") {
+      profile_tests();
       std::printf("%s\n", failed == 0 ? "all checks passed" : "CHECKS FAILED");
       return failed == 0 ? 0 : 1;
     }
@@ -5536,6 +5830,9 @@ int main() {
   cam_clear_tests();
   seed_push_tests();
   landing_tests();
+  profile_tests();
+  checkpoint_tests();
+  reaim_tests();
   std::printf("%s\n", failed == 0 ? "all checks passed" : "CHECKS FAILED");
   return failed == 0 ? 0 : 1;
 }

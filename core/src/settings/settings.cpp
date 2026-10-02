@@ -126,6 +126,12 @@ bool write(const std::string& json, std::string* why) {
   return true;
 }
 
+std::string folder() {
+  const std::filesystem::path base = home();
+  if (base.empty()) return {};
+  return (base / kFolder).string();
+}
+
 std::string cache_dir() {
   const std::filesystem::path base = home();
   if (base.empty()) return {};

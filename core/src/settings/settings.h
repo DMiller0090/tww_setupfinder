@@ -17,6 +17,9 @@ bool write(const std::string& json, std::string* why);
 /** Empty with no per-user config directory. */
 std::string log_path();
 
+/** The folder holding the settings file. Empty with no per-user config directory. */
+std::string folder();
+
 /** The camera field cache. Empty with no per-user config directory. */
 std::string cache_dir();
 

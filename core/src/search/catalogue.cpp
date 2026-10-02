@@ -1,6 +1,7 @@
 #include "catalogue.h"
 #include "cup_exit.h"
 #include "l_chain.h"
+#include "profile.h"
 
 #include <algorithm>
 #include <cmath>
@@ -749,8 +750,14 @@ Drive drive(const Move& move, const tww_engine::Init& init, const tww_engine::Ro
   };
   thread_local Lent lent;
   const bool can_lend = dzb != nullptr && watched.ground != tww_engine::RunOptions::Ground::Supplied;
+  profile::Timed setting_up(profile::kSession);
   if (can_lend) {
-    if (!lent.room || !same_room(lent.from, *dzb)) {
+    bool same = false;
+    {
+      profile::Timed comparing(profile::kSameRoom);
+      same = lent.room && same_room(lent.from, *dzb);
+    }
+    if (!same) {
       lent.room.reset();
       lent.room.reset(new tww_engine::Room(*dzb));
       lent.from = *dzb;
@@ -761,6 +768,7 @@ Drive drive(const Move& move, const tww_engine::Init& init, const tww_engine::Ro
       can_lend ? new tww_engine::Session(seed, *lent.room, watched)
                : new tww_engine::Session(seed, dzb, watched));
   tww_engine::Session& session = *made;
+  setting_up.stop();
   /* From the seed as handed in, so the pre-frame collision pass's push is part of the net. */
   const double x0 = static_cast<double>(init.pos.x);
   const double y0 = static_cast<double>(init.pos.y);

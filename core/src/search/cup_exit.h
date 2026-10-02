@@ -41,10 +41,22 @@ struct Computed {
 };
 Computed computed();
 
-/** A value run through the engine once per key and kept, for every thread; `run` fills a miss. */
-int kept(const std::string& key, int (*run)(const void*), const void* args);
+/** The most C-down chain taps a kept row holds (`l_chain::kTaps`). */
+const int kChainTaps = 8;
 
-/** A `kept` key: what is kept, the spot's bits and three numbers. */
-std::string key(char what, const cup_tape::Spot& at, int a, int b, int c);
+/** A kept row: a way out of the view (`which` is the `Way`), or the C-down chain after `which`
+ *  taps. */
+enum class Kept { Exit, Taps };
+
+/** A value run through the engine once per spot and row and kept for every thread, read without a
+ *  lock; `run` fills a miss, and a thread asking for a row another is running waits for it. */
+int kept(const cup_tape::Spot& at, Kept what, int facing, int dir, int which,
+         int (*run)(const void*), const void* args);
+
+/** Writes every row kept for `at` to `path` (a checkpoint); false on a write error. */
+bool save_rows(const cup_tape::Spot& at, const std::string& path);
+
+/** Reads rows `save_rows` wrote back into the table for their spot; false when unreadable. */
+bool load_rows(const std::string& path);
 
 }  // namespace cup_exit

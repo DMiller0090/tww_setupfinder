@@ -1,6 +1,8 @@
 #include "search.h"
 #include "cup_exit.h"
 #include "l_chain.h"
+#include "checkpoint.h"
+#include "profile.h"
 
 #include <algorithm>
 #include <atomic>
@@ -10,11 +12,13 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <mutex>
 #include <chrono>
 #include <set>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 
 #include "SSystem/SComponent/c_math.h"
@@ -267,6 +271,76 @@ struct Trail {
   std::vector<double> threshold;
   std::vector<double> floor;
 };
+
+/* A kept run is read back by the same build, so its states are written as their bytes. */
+static_assert(std::is_trivially_copyable<Node>::value, "a kept walk writes its states as bytes");
+static_assert(std::is_trivially_copyable<Key>::value, "and its signatures");
+
+void put(checkpoint::Writer& w, const Candidate& c) {
+  w.pods(c.path);
+  w.pod(c.x);
+  w.pod(c.y);
+  w.pod(c.z);
+  w.pod(c.facing);
+  w.pod(c.frames);
+  w.pod(c.distance);
+  w.pod(c.gap);
+  w.pod(c.allowance);
+  w.pod(c.consult);
+  w.pod(c.handed_off);
+}
+
+void get(checkpoint::Reader& r, Candidate* c) {
+  r.pods(&c->path);
+  c->x = r.pod<double>();
+  c->y = r.pod<double>();
+  c->z = r.pod<double>();
+  c->facing = r.pod<int>();
+  c->frames = r.pod<int>();
+  c->distance = r.pod<double>();
+  c->gap = r.pod<double>();
+  c->allowance = r.pod<double>();
+  c->consult = r.pod<double>();
+  c->handed_off = r.pod<bool>();
+}
+
+void put(checkpoint::Writer& w, const std::vector<Candidate>& all) {
+  w.pod<uint64_t>(all.size());
+  for (const Candidate& c : all) put(w, c);
+}
+
+bool get(checkpoint::Reader& r, std::vector<Candidate>* all) {
+  const uint64_t n = r.pod<uint64_t>();
+  if (!r.ok() || n > (uint64_t(1) << 28)) return false;
+  all->resize(static_cast<size_t>(n));
+  for (Candidate& c : *all) get(r, &c);
+  return r.ok();
+}
+
+void put(checkpoint::Writer& w, const Trail& t) {
+  w.pods(t.path);
+  w.pods(t.key);
+  w.pods(t.frames);
+  w.pods(t.consult);
+  w.pods(t.allowance);
+  w.pods(t.handed);
+  w.pods(t.threshold);
+  w.pods(t.floor);
+}
+
+void get(checkpoint::Reader& r, Trail* t) {
+  r.pods(&t->path);
+  r.pods(&t->key);
+  r.pods(&t->frames);
+  r.pods(&t->consult);
+  r.pods(&t->allowance);
+  r.pods(&t->handed);
+  r.pods(&t->threshold);
+  r.pods(&t->floor);
+}
+
+const uint32_t kRunMagic = 0x4B434653;   // "SFCK"
+const uint32_t kWalkMagic = 0x4B4C4157;  // "WALK"
 
 /** Whether a camera move's camera stays clear of the room up to its tap, over the directions from
  *  its start camera to its tap camera through the facing (all of them with no camera seated). */
@@ -732,9 +806,72 @@ cup_tape::Spot camera_spot(const Question& q) {
   return s;
 }
 
+Model model_for(const BaseTable& base, const Grid& grid, const Selection& selection,
+                const Calibration& cal) {
+  Model m;
+  m.base = &base;
+  m.grid = &grid;
+  m.selection = &selection;
+  m.cal_of.resize(base.move.size(), nullptr);
+  m.plane_of.resize(base.move.size(), nullptr);
+  for (size_t i = 0; i < base.move.size(); ++i) {
+    m.cal_of[i] = cal.of(base.move[i].id);
+    m.plane_of[i] = cal.plane_of(base.move[i].id);
+  }
+  return m;
+}
+
+bool can_still_land(const Question& question, const Model& model, const std::vector<Edge>& path,
+                    size_t from, const Pose& pose, double x, double y, double z) {
+  if (model.base == nullptr || model.grid == nullptr || model.selection == nullptr) return true;
+  if (question.target.mask.any()) return true;
+  const cup_tape::Spot mid = camera_spot(question);
+  Pose now = pose;
+  double at_x = x, at_y = y, at_z = z;
+  /* Each move's own measured error and float floor, as the walk adds them. */
+  double owed = 0.0;
+  for (size_t k = from; k < path.size(); ++k) {
+    if (path[k].row < 0 || static_cast<size_t>(path[k].row) >= model.base->move.size()) {
+      return true;
+    }
+    const size_t r = static_cast<size_t>(path[k].row);
+    const BaseMove& row = model.base->move[r];
+    const Seat seat = seat_of(row.id);
+    Pose was = now;
+    Pose next;
+    if (turn_steps(row) > 0) {
+      if (!model_step(seat, row.turn, path[k].steps, was, &next, &mid)) return true;
+      now = next;
+      continue;
+    }
+    was.taps = path[k].taps;
+    if (!model_step(seat, row.turn, 1, was, &next, &mid)) return true;
+    const Stepped st = step_move(row, *model.grid, *model.selection, model.cal_of[r],
+                                 model.plane_of[r], at_x, at_y, at_z, now.facing,
+                                 question.collision);
+    if (!st.ok || st.handed_off) return true;
+    owed += charge_of(model.cal_of[r], model.plane_of[r], st.sloped_frames, st.tabled) +
+            consult_floor(std::max(std::fabs(st.x), std::fabs(st.z)), question.check_range);
+    at_x = st.x;
+    at_y = st.y;
+    at_z = st.z;
+    now = next;
+  }
+  double ax = 0, az = 0;
+  aim_point(question, at_x, at_z, now.facing, &ax, &az);
+  const bool feet = question.target.from_feet;
+  return question.target.distance(feet ? at_x : ax, feet ? at_z : az) <=
+         question.tolerance + owed;
+}
+
 Found search_tree(const Question& question, const BaseTable& base, const Grid& grid,
                   const Selection& selection, const Calibration& cal, const Stepper* instead,
-                  Watching* watch) {
+                  Watching* watch, Pausing* pausing) {
+  /* The split runs on this thread, then it reports. */
+  profile::enter("split and report");
+  struct Leaving {
+    ~Leaving() { profile::leave(); }
+  } leaving;
   Found found;
   const cup_tape::Spot mid = camera_spot(question);
   const std::vector<int> rows = rows_for(question, base);
@@ -803,6 +940,8 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     /* Per-move bounds for the steps bound, tested before stepping. */
     double travel;
     double charge;
+    /* The row group the profile counts it under. */
+    profile::Row group;
   };
   std::vector<Option> option;
   int cheapest_move = 0;
@@ -822,6 +961,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
         o.travel = 0.0;
         o.charge = 0.0;
         o.taps = 0;
+        o.group = profile::kTurn;
         option.push_back(o);
       }
       const int price = row.frames > 0 ? row.frames : 1;
@@ -838,6 +978,9 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     o.charge = std::max(charge_of(o.mc, o.pt, 1 << 20, false), o.pt != nullptr ? o.pt->worst : 0.0) +
                step_floor;
     o.taps = 0;
+    o.group = is_ess(o.seat)            ? profile::kEss
+              : o.seat == Seat::Kept ? profile::kMove
+                                     : profile::kExit;
     option.push_back(o);
     if (takes_taps(o.seat)) {
       for (int t = 1; t <= l_chain::kTaps; ++t) {
@@ -996,6 +1139,139 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     Reaped() : exhausted(true), serial(0), next_id(0), splitting(false) {}
   };
 
+  /* A walk's own place, so a stopped one can be kept and carried on (`Pausing`). */
+  struct Walking {
+    std::vector<Level> stack;
+    Closest closest;
+    long long since_told = 0;
+    bool begun = false;
+    /* Stopped by the watcher rather than finished, and its exhausted flag before the stop. */
+    bool paused = false;
+    bool was_exhausted = true;
+  };
+
+  const std::string save_dir = pausing != nullptr ? pausing->save : std::string();
+  const std::string resume_dir = pausing != nullptr ? pausing->resume : std::string();
+  auto walk_file = [](const std::string& dir, size_t i) {
+    return (std::filesystem::path(dir) / ("walk-" + std::to_string(i) + ".bin")).string();
+  };
+  auto run_file = [](const std::string& dir) {
+    return (std::filesystem::path(dir) / "run.bin").string();
+  };
+  auto put_layout = [](checkpoint::Writer& w) {
+    w.pod(static_cast<uint32_t>(sizeof(Node)));
+    w.pod(static_cast<uint32_t>(sizeof(Seen::Slot)));
+    w.pod(static_cast<uint32_t>(sizeof(Key)));
+    w.pod(static_cast<uint32_t>(sizeof(Counters)));
+    w.pod(static_cast<uint32_t>(sizeof(Edge)));
+  };
+  auto same_layout = [](checkpoint::Reader& r) {
+    return r.pod<uint32_t>() == sizeof(Node) && r.pod<uint32_t>() == sizeof(Seen::Slot) &&
+           r.pod<uint32_t>() == sizeof(Key) && r.pod<uint32_t>() == sizeof(Counters) &&
+           r.pod<uint32_t>() == sizeof(Edge);
+  };
+
+  /* Each stopped walk is written by its own thread, straight from its tables. */
+  auto save_walk = [&](size_t i, const Seen& mine, const Walking& state, const Reaped& got,
+                       size_t published_count) -> bool {
+    checkpoint::Writer w(walk_file(save_dir, i));
+    w.pod(kWalkMagic);
+    w.pod(checkpoint::kVersion);
+    put_layout(w);
+    w.pod(static_cast<uint64_t>(i));
+    /* Only the slots holding a signature, with where they sit. */
+    std::vector<uint32_t> held_at;
+    std::vector<Seen::Slot> held;
+    for (size_t k = 0; k < mine.slot.size(); ++k) {
+      if (!mine.slot[k].taken) continue;
+      held_at.push_back(static_cast<uint32_t>(k));
+      held.push_back(mine.slot[k]);
+    }
+    w.pod(static_cast<uint64_t>(mine.slot.size()));
+    w.pods(held_at);
+    w.pods(held);
+    w.pod(static_cast<uint64_t>(state.stack.size()));
+    for (const Level& level : state.stack) {
+      w.pods(level.child);
+      w.pod(static_cast<uint64_t>(level.next));
+      w.pod(level.lo);
+    }
+    put(w, state.closest.kept);
+    w.pod(state.since_told);
+    w.pod(state.was_exhausted);
+    put(w, got.raw);
+    put(w, got.kept);
+    w.pod(got.count);
+    w.pod(static_cast<uint64_t>(got.listed.size()));
+    for (const Listed& one : got.listed) {
+      put(w, one.trail);
+      put(w, one.end);
+    }
+    w.pod(static_cast<uint64_t>(got.spliced.size()));
+    for (const std::vector<Edge>& path : got.spliced) w.pods(path);
+    w.pod(got.serial);
+    w.pod(got.next_id);
+    w.pod(static_cast<uint64_t>(published_count));
+    return w.close();
+  };
+
+  auto load_walk = [&](size_t i, Seen* mine, Walking* state, Reaped* got,
+                       size_t* published_count) -> bool {
+    checkpoint::Reader r(walk_file(resume_dir, i));
+    if (r.pod<uint32_t>() != kWalkMagic || r.pod<uint32_t>() != checkpoint::kVersion ||
+        !same_layout(r) || r.pod<uint64_t>() != i) {
+      return false;
+    }
+    const uint64_t slots = r.pod<uint64_t>();
+    std::vector<uint32_t> held_at;
+    std::vector<Seen::Slot> held;
+    r.pods(&held_at);
+    r.pods(&held);
+    if (!r.ok() || slots != found.quanta.slots || held_at.size() != held.size()) return false;
+    mine->ready(static_cast<size_t>(slots));
+    for (size_t k = 0; k < held.size(); ++k) {
+      if (held_at[k] >= slots) return false;
+      mine->slot[held_at[k]] = held[k];
+    }
+    const uint64_t levels = r.pod<uint64_t>();
+    if (!r.ok() || levels > 4096) return false;
+    state->stack.resize(static_cast<size_t>(levels));
+    for (Level& level : state->stack) {
+      r.pods(&level.child);
+      level.next = static_cast<size_t>(r.pod<uint64_t>());
+      level.lo = r.pod<uint64_t>();
+    }
+    if (!get(r, &state->closest.kept)) return false;
+    state->since_told = r.pod<long long>();
+    state->was_exhausted = r.pod<bool>();
+    if (!get(r, &got->raw) || !get(r, &got->kept)) return false;
+    got->count = r.pod<Counters>();
+    const uint64_t listed = r.pod<uint64_t>();
+    if (!r.ok() || listed > (uint64_t(1) << 32)) return false;
+    got->listed.resize(static_cast<size_t>(listed));
+    for (size_t at = 0; at < got->listed.size(); ++at) {
+      get(r, &got->listed[at].trail);
+      get(r, &got->listed[at].end);
+      for (size_t k = 0; k < got->listed[at].trail.key.size(); ++k) {
+        got->listed_at.emplace(Seen::digest(got->listed[at].trail.key[k]), std::make_pair(at, k));
+      }
+    }
+    const uint64_t spliced = r.pod<uint64_t>();
+    if (!r.ok() || spliced > (uint64_t(1) << 32)) return false;
+    for (uint64_t k = 0; k < spliced; ++k) {
+      std::vector<Edge> one;
+      r.pods(&one);
+      got->spliced.insert(one);
+    }
+    got->serial = r.pod<uint64_t>();
+    got->next_id = r.pod<uint64_t>();
+    *published_count = static_cast<size_t>(r.pod<uint64_t>());
+    got->exhausted = state->was_exhausted;
+    state->begun = true;
+    state->paused = false;
+    return r.ok();
+  };
+
   /* The tied path, then the listed plan after its state `s`, with its band rebuilt from its own
      moves. False where the states differ, frames or steps are exceeded, or it fails the near test. */
   auto splice = [&](const Trail& tie, const Listed& one, size_t s, Listed* twin) -> bool {
@@ -1126,6 +1402,9 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
   auto expand = [&](Seen& best, Counters* count, const Node& here, Level* into, const Trail& root,
                     const std::vector<Level>& stack, Reaped* reap,
                     const std::function<void(const Candidate&)>* drove, double beaten) {
+    const bool prof = profile::on();
+    profile::Timed whole_expansion(profile::kExpand);
+    const long long generated_before = count->generated;
     into->next = 0;
     into->lo = reap->next_id;
     into->child.clear();
@@ -1133,6 +1412,10 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     for (size_t oi = 0; oi < option.size(); ++oi) {
       const Option o = option[oi];
       const BaseMove& row = base.move[static_cast<size_t>(o.row)];
+      const auto fated = [&](profile::Fate fate) {
+        if (prof) profile::row_fate(o.group, fate);
+      };
+      profile::Timed child_time;
 
       Node child;
       if (o.steps != 0) {
@@ -1140,6 +1423,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
         if (here.edge.row >= 0 && turn_steps(base.move[static_cast<size_t>(here.edge.row)]) > 0) {
           continue;
         }
+        child_time.start(profile::kTurnChild, false);
         ++count->generated;
         child = here;
         child.move_handed = false;
@@ -1158,9 +1442,13 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
         was.has_camera = here.has_camera;
         was.cup_dir = here.cup_dir;
         Pose now;
-        if (!model_step(o.seat, row.turn, o.steps, was, &now, &mid)) continue;
+        if (!model_step(o.seat, row.turn, o.steps, was, &now, &mid)) {
+          fated(profile::kCannot);
+          continue;
+        }
         if (unlandable(child.depth, child.frames, now.facing)) {
           ++count->unlandable;
+          fated(profile::kUnlandable);
           continue;
         }
         child.facing = now.facing;
@@ -1181,6 +1469,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
           after.farthest_closest = beaten;
           if (after.cannot_help()) {
             ++count->steps_pruned;
+            fated(profile::kStepsCut);
             continue;
           }
         }
@@ -1193,13 +1482,20 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
         was.cup_dir = here.cup_dir;
         was.taps = o.taps;
         Pose now;
-        if (!model_step(o.seat, row.turn, 1, was, &now, &mid)) {
+        bool aimed = false;
+        {
+          profile::Timed timed(profile::kModelStep, false);
+          aimed = model_step(o.seat, row.turn, 1, was, &now, &mid);
+        }
+        if (!aimed) {
           ++count->generated;
+          fated(profile::kCannot);
           continue;
         }
         if (!camera_clear(question.camera_clear, o.seat, o.taps, here, now)) {
           ++count->generated;
           ++count->camera_met;
+          fated(profile::kCamera);
           continue;
         }
         if (unlandable(here.depth + 1,
@@ -1207,16 +1503,26 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
                        now.facing)) {
           ++count->generated;
           ++count->unlandable;
+          fated(profile::kUnlandable);
           continue;
         }
-        const Stepped st =
-            instead != nullptr
-                ? instead->step(row, here.x, here.y, here.z, here.facing)
-                : step_move(row, grid, selection, o.mc, o.pt, here.x, here.y, here.z,
-                            here.facing, question.collision);
+        Stepped st;
+        {
+          profile::Timed timed(profile::kStep);
+          st = instead != nullptr
+                   ? instead->step(row, here.x, here.y, here.z, here.facing)
+                   : step_move(row, grid, selection, o.mc, o.pt, here.x, here.y, here.z,
+                               here.facing, question.collision);
+        }
         ++count->generated;
+        if (prof) {
+          profile::plane_step(o.row, here.facing, st.plane, st.sloped_frames > 0, st.planes);
+        }
         /* Defensive: `rows_for` already excludes unsteppable rows. */
-        if (!st.ok) continue;
+        if (!st.ok) {
+          fated(profile::kCannot);
+          continue;
+        }
         child.x = st.x;
         child.y = st.y;
         child.z = st.z;
@@ -1245,12 +1551,16 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
 
       if (child.frames > question.frames) {
         ++count->bound_pruned;
+        fated(profile::kOverFrames);
         continue;
       }
       if (!question.bounds.holds(child.x, child.z)) {
         ++count->outside_bounds;
+        fated(profile::kOutside);
         continue;
       }
+      {
+      profile::Timed tests(profile::kTests, false);
       {
         double ax = 0, az = 0;
         aim_point(question, child.x, child.z, child.facing, &ax, &az);
@@ -1261,6 +1571,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
         if (Bound::of(question, found.rate, found.slack, child.distance, child.frames,
                       child.consult) > question.frames) {
           ++count->bound_pruned;
+          fated(profile::kOverFrames);
           continue;
         }
         child.distance = question.target.distance(mx, mz);
@@ -1280,6 +1591,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
                                     child.frames, child.consult);
       if (f > question.frames) {
         ++count->bound_pruned;
+        fated(profile::kOverFrames);
         continue;
       }
 
@@ -1297,22 +1609,28 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
         now.farthest_closest = beaten;
         if (now.cannot_help()) {
           ++count->steps_pruned;
+          fated(profile::kStepsCut);
           continue;
         }
       }
+      }
 
+      const uint64_t id = reap->next_id;
+      {
+      profile::Timed dominance(profile::kDominance, false);
       const Key k = key_of(child, found.quanta);
       size_t where = 0;
       int* held = best.find(k, &where);
       /* A tie is an order the model cannot tell apart but the engine can. If the held state's
          subtree is walked, splice its listed plans onto this path and drop it; otherwise walk
          this one as its own state. */
-      const uint64_t id = reap->next_id;
       if (held != nullptr) {
         if (*held <= child.frames) {
           const bool tie = *held == child.frames;
           if (!(tie && still_open(best.id_at(where), stack, reap))) {
             ++count->dominance_kills;
+            /* A splice drives the engine; that is timed as the engine's, not here. */
+            dominance.stop();
             if (tie) {
               std::vector<std::pair<size_t, size_t> > through;
               const size_t d = Seen::digest(k);
@@ -1340,6 +1658,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
                 }
               }
             }
+            fated(profile::kDominated);
             continue;
           }
         } else {
@@ -1349,11 +1668,17 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
       } else {
         best.keep(k, child.frames, where, id);
       }
+      }
 
+      fated(child.left || child.depth >= deepest ||
+                    static_cast<long long>(child.frames) + least_next > question.frames
+                ? profile::kLeaf
+                : profile::kKept);
       child.id = id;
       ++reap->next_id;
       into->child.push_back(child);
     }
+    profile::Timed sorting(profile::kSort);
     if (lands.empty()) {
       std::sort(into->child.begin(), into->child.end(), Nearest::before);
     } else {
@@ -1367,6 +1692,10 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
         return Nearest::before(a, b);
       });
     }
+    if (prof) {
+      profile::depth_generated(here.depth + 1,
+                               static_cast<uint64_t>(count->generated - generated_before));
+    }
   };
 
   /* One subtree, depth-first on one thread. At `stop_depth` a child becomes an `Item` instead of
@@ -1375,19 +1704,29 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
   auto walk = [&](const Node& root, const Trail& root_trail, Seen& best,
                   int stop_depth, size_t cap,
                   const std::function<bool(const Reaped&, int)>* tick,
-                  const std::function<void(const Candidate&)>* drove, Reaped* out) {
+                  const std::function<void(const Candidate&)>* drove, Reaped* out,
+                  Walking* state) {
     const std::vector<Edge>& root_path = root_trail.path;
-    std::vector<Level> stack;
+    std::vector<Level>& stack = state->stack;
     stack.reserve(static_cast<size_t>(deepest) + 2);
-    Closest closest;
-    long long since_told = kTellEvery;
+    Closest& closest = state->closest;
+    long long& since_told = state->since_told;
     bool stopped = false;
 
-    stack.push_back(Level());
-    expand(best, &out->count, root, &stack.back(), root_trail, stack, out, drove, seeded);
-    ++out->count.expanded;
+    const bool prof = profile::on();
+    unsigned popped = 0;
+
+    if (!state->begun) {
+      since_told = kTellEvery;
+      stack.push_back(Level());
+      expand(best, &out->count, root, &stack.back(), root_trail, stack, out, drove, seeded);
+      ++out->count.expanded;
+      if (prof) profile::depth_expanded(root.depth);
+      state->begun = true;
+    }
 
     while (!stack.empty() && !stopped) {
+      if (prof && (++popped & 1023u) == 0) profile::refresh();
       if (tick != nullptr && ++since_told >= kTellEvery) {
         since_told = 0;
         /* Finished share of each level's children by their likely size, scaled by the share of
@@ -1415,6 +1754,8 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
         if (frac > 1.0) frac = 1.0;
         out->kept = closest.kept;
         if (!(*tick)(*out, static_cast<int>(frac * 1e6))) {
+          state->paused = true;
+          state->was_exhausted = out->exhausted;
           out->exhausted = false;
           stopped = true;
           break;
@@ -1438,6 +1779,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
           !near && !short_of &&
           (closest.kept.size() < kKeep || child.distance <= closest.kept.front().distance);
       if (near || could_be_closest) {
+        profile::Timed recording(profile::kRecord);
         Candidate c;
         c.x = child.x;
         c.y = child.y;
@@ -1464,6 +1806,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
             one.end = c;
             list(out, one);
           }
+          recording.stop();
           if (drove != nullptr && !short_of) (*drove)(c);
           if (given_away || short_of) {
           } else if (out->raw.size() < cap) {
@@ -1495,6 +1838,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
       expand(best, &out->count, child, &stack.back(), root_trail, stack, out, drove,
              std::min(own, seeded));
       ++out->count.expanded;
+      if (prof) profile::depth_expanded(child.depth);
     }
     out->kept = closest.kept;
   };
@@ -1532,6 +1876,52 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     watch->found(one);
   };
   const std::function<void(const Candidate&)>* handing = watch != nullptr ? &drove : nullptr;
+
+  /* A kept run to carry on: its totals, and which walks it stopped. */
+  struct Resumed {
+    bool on = false;
+    uint64_t items = 0, next = 0, finished = 0;
+    double size_done = 0.0, seeded = 0.0;
+    int shown = 0;
+    Counters count;
+    bool exhausted = true, full = false;
+    long long held = 0;
+    std::vector<Candidate> raw, kept;
+    std::vector<uint64_t> paused;
+  } resumed;
+  if (!resume_dir.empty()) {
+    checkpoint::Reader r(run_file(resume_dir));
+    const bool head = r.pod<uint32_t>() == kRunMagic && r.pod<uint32_t>() == checkpoint::kVersion &&
+                      same_layout(r);
+    const std::string identity = head ? r.text() : std::string();
+    const uint64_t slots = r.pod<uint64_t>();
+    resumed.items = r.pod<uint64_t>();
+    resumed.next = r.pod<uint64_t>();
+    resumed.finished = r.pod<uint64_t>();
+    resumed.size_done = r.pod<double>();
+    resumed.shown = r.pod<int>();
+    resumed.seeded = r.pod<double>();
+    resumed.count = r.pod<Counters>();
+    resumed.exhausted = r.pod<bool>();
+    resumed.held = r.pod<long long>();
+    resumed.full = r.pod<bool>();
+    const bool lists = get(r, &resumed.raw) && get(r, &resumed.kept);
+    r.pods(&resumed.paused);
+    std::string why;
+    if (!head || !lists || !r.ok()) {
+      why = "the kept run will not read";
+    } else if (identity != pausing->identity) {
+      why = "the kept run is another question";
+    } else if (slots != found.quanta.slots) {
+      why = "the kept run's dominance tables are another size";
+    }
+    if (!why.empty()) {
+      pausing->refused = why;
+      found.exhausted = false;
+      return found;
+    }
+    resumed.on = true;
+  }
 
   Seen seed;
   Reaped prefix;
@@ -1571,7 +1961,8 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     prefix.serial = 1;
     prefix.next_id = uint64_t(1) << 40;
     prefix.splitting = true;
-    walk(start, Trail(), seed, split, kMostCandidates, nullptr, handing, &prefix);
+    Walking splitting;
+    walk(start, Trail(), seed, split, kMostCandidates, nullptr, handing, &prefix, &splitting);
 
     if (!prefix.exhausted) break;
     if (prefix.item.size() >= kItemsWanted) break;
@@ -1585,6 +1976,19 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
   std::vector<Candidate> kept = prefix.kept;
   found.count = prefix.count;
   found.exhausted = prefix.exhausted;
+  if (resumed.on) {
+    if (resumed.items != prefix.item.size()) {
+      pausing->refused = "the kept run split into other work items";
+      found.exhausted = false;
+      return found;
+    }
+    raw = resumed.raw;
+    kept = resumed.kept;
+    found.count = resumed.count;
+    found.exhausted = resumed.exhausted;
+    held_bytes.store(resumed.held);
+    memory_full.store(resumed.full);
+  }
 
   /* The items are merged order-free, so any core count answers the same list. */
   if (!prefix.item.empty()) {
@@ -1592,8 +1996,8 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     /* The whole cap, not a share: the run-level ceiling is enforced on the shared list. */
     const size_t cap_each = kMostCandidates;
 
-    std::atomic<size_t> next(0);
-    size_t finished = 0;
+    std::atomic<size_t> next(resumed.on ? static_cast<size_t>(resumed.next) : 0);
+    size_t finished = resumed.on ? static_cast<size_t>(resumed.finished) : 0;
     /* Each item's likely size, so the run's share is the work done rather than the items. */
     std::vector<double> item_size;
     {
@@ -1601,10 +2005,11 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
       for (size_t i = 0; i < item.size(); ++i) spent[i] = item[i].node.frames;
       item_size = sizes(spent);
     }
-    double size_total = 0.0, size_done = 0.0;
+    double size_total = 0.0, size_done = resumed.on ? resumed.size_done : 0.0;
     for (size_t i = 0; i < item_size.size(); ++i) size_total += item_size[i];
     /* Progress shown, held monotone across threads. */
-    int shown = 0;
+    int shown = resumed.on ? resumed.shown : 0;
+    if (resumed.on) seeded = resumed.seeded;
 
     int hands = question.cores;
     if (hands < 1) hands = 1;
@@ -1613,7 +2018,7 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     /* Dives: walk the first `kDive` states of the `kDiveItems` nearest items, each on a fresh copy
        of the seed table and handing nothing over, to seed `seeded` for the steps bound. Same on
        any core count. Skipped for the recall audit. */
-    if (question.distance_bound && instead == nullptr) {
+    if (question.distance_bound && instead == nullptr && !resumed.on) {
       const long long kDive = 1024;
       const size_t kDiveItems = 64;
       std::vector<size_t> dived(item.size());
@@ -1629,6 +2034,10 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
       std::vector<long long> dove_states(dived.size(), 0);
       std::atomic<size_t> dive_next(0);
       auto diver = [&]() {
+        profile::enter("dive");
+        struct Leaving {
+          ~Leaving() { profile::leave(); }
+        } leaving;
         Seen mine;
         const std::function<bool(const Reaped&, int)> enough =
             [&](const Reaped& r, int) -> bool { return r.count.generated < kDive; };
@@ -1636,12 +2045,16 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
           const size_t d = dive_next.fetch_add(1);
           if (d >= dived.size()) return;
           const size_t i = dived[d];
-          mine = seed;
+          {
+            profile::Timed copying(profile::kItemSetup);
+            mine = seed;
+          }
           Reaped got;
           got.serial = static_cast<uint64_t>(i) + 2;
           got.next_id = got.serial << 40;
+          Walking diving;
           walk(item[i].node, item[i].trail, mine, deepest + 1, kMostCandidates, &enough, nullptr,
-               &got);
+               &got, &diving);
           dove[d] = got.kept;
           dove_states[d] = got.count.generated;
         }
@@ -1668,43 +2081,65 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     std::vector<long long> flight_item(static_cast<size_t>(hands), -1);
     std::vector<int> flight_through(static_cast<size_t>(hands), 0);
 
-    /* Report the whole run; called with the gate held. False means stop. */
-    auto tell = [&]() -> bool {
-      if (watch == nullptr) return true;
+    /* Walks stopped and kept, with what they had found, folded into the report only after the
+       run is written so a resume does not count them twice. */
+    std::vector<uint64_t> paused_items;
+    std::vector<Counters> paused_count;
+    std::vector<Candidate> paused_raw, paused_kept;
+    bool keep_failed = false;
+    std::atomic<size_t> resumed_next(0);
+
+    /* One report, copied under the gate so the watcher, which writes to the window and drives the
+       engine, runs without it: a slow reader must not hold up the walkers. */
+    struct Report {
+      Counters live;
+      int shown = 0;
+      size_t candidates = 0;
+      bool closest_wanted = false;
+      std::vector<Candidate> near_miss;
+    };
+    /* Called with the gate held. */
+    auto gather = [&](Report* r) {
+      double got = size_done;
+      for (size_t h = 0; h < flight_item.size(); ++h) {
+        if (flight_item[h] < 0) continue;
+        got += item_size[static_cast<size_t>(flight_item[h])] * flight_through[h] / 1e6;
+      }
+      long long part = size_total > 0.0 ? static_cast<long long>(got / size_total * 1e6) : 0;
+      if (part > 1000000) part = 1000000;
+      if (part > shown) shown = static_cast<int>(part);
+      r->shown = shown;
+      r->live = found.count;
+      for (size_t h = 0; h < flight.size(); ++h) Add::into(&r->live, flight[h]);
+      r->live.held_bytes = held_bytes.load();
+      r->live.memory_full = memory_full.load();
+      r->candidates = raw.size();
+      r->closest_wanted = watch->wants_so_far();
+      if (r->closest_wanted) {
+        r->near_miss = kept;
+        for (size_t h = 0; h < flight_kept.size(); ++h) {
+          r->near_miss.insert(r->near_miss.end(), flight_kept[h].begin(), flight_kept[h].end());
+        }
+      }
+    };
+    /* Report the whole run, without the gate. False means stop. */
+    auto tell = [&](const Report& r) -> bool {
       /* A stopped run reports nothing more. */
       if (pressed.load()) return false;
-      {
-        double got = size_done;
-        for (size_t h = 0; h < flight_item.size(); ++h) {
-          if (flight_item[h] < 0) continue;
-          got += item_size[static_cast<size_t>(flight_item[h])] * flight_through[h] / 1e6;
-        }
-        long long part = size_total > 0.0 ? static_cast<long long>(got / size_total * 1e6) : 0;
-        if (part > 1000000) part = 1000000;
-        if (part > shown) shown = static_cast<int>(part);
-      }
-      Counters live = found.count;
-      for (size_t h = 0; h < flight.size(); ++h) Add::into(&live, flight[h]);
-      live.held_bytes = held_bytes.load();
-      live.memory_full = memory_full.load();
-      if (!watch->walked(live, shown, raw.size())) {
+      if (!watch->walked(r.live, r.shown, r.candidates)) {
         pressed.store(true);
         return false;
       }
       /* Only the closest; candidates already went to `Watching::found`. */
-      if (watch->wants_so_far()) {
-        std::vector<Candidate> near_miss = kept;
-        for (size_t h = 0; h < flight_kept.size(); ++h) {
-          near_miss.insert(near_miss.end(), flight_kept[h].begin(), flight_kept[h].end());
-        }
+      if (r.closest_wanted) {
         Found sofar;
-        sofar.count = live;
+        sofar.count = r.live;
         sofar.quanta = found.quanta;
         sofar.unstepped = found.unstepped;
         sofar.rate = found.rate;
         sofar.slack = found.slack;
         sofar.exhausted = false;
-        sofar.closest = Shape::twenty(near_miss, kKeep);
+        sofar.closest = Shape::twenty(r.near_miss, kKeep);
         sofar.count.kept_closest = static_cast<long long>(sofar.closest.size());
         watch->so_far(sofar);
       }
@@ -1712,6 +2147,10 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
     };
 
     auto worker = [&](size_t me) {
+      profile::enter("walk");
+      struct Leaving {
+        ~Leaving() { profile::leave(); }
+      } leaving;
       Seen mine;
       /* How much of this walk's raw list is already on the run's. */
       size_t published = 0;
@@ -1719,7 +2158,9 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
       /* Publishes this walk's progress; the calling thread does the reporting. */
       const std::function<bool(const Reaped&, int)> beat =
           [&](const Reaped& walking, int through) -> bool {
+        const uint64_t asked = profile::on() ? profile::cycles() : 0;
         std::lock_guard<std::mutex> lock(gate);
+        if (asked != 0) profile::add(profile::kReportWait, profile::cycles() - asked);
         if (pressed.load()) return false;
         flight_through[me] = through < 0 ? 0 : (through > 1000000 ? 1000000 : through);
         flight[me] = walking.count;
@@ -1741,20 +2182,57 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
 
       for (;;) {
         if (pressed.load()) return;
-        const size_t i = next.fetch_add(1);
-        if (i >= item.size()) return;
-        /* Each item's own dominance table, seeded from the split's. */
-        mine = seed;
+        Walking state;
         Reaped got;
-        got.serial = static_cast<uint64_t>(i) + 2;
-        got.next_id = got.serial << 40;
-        published = 0;
+        size_t i = 0;
+        const size_t r = resumed.on ? resumed_next.fetch_add(1) : resumed.paused.size();
+        if (r < resumed.paused.size()) {
+          i = static_cast<size_t>(resumed.paused[r]);
+          profile::Timed copying(profile::kItemSetup);
+          if (i >= item.size() || !load_walk(i, &mine, &state, &got, &published)) {
+            std::lock_guard<std::mutex> lock(gate);
+            if (pausing->refused.empty()) pausing->refused = "a kept walk will not read";
+            found.exhausted = false;
+            pressed.store(true);
+            return;
+          }
+        } else {
+          i = next.fetch_add(1);
+          if (i >= item.size()) return;
+          /* Each item's own dominance table, seeded from the split's. */
+          {
+            profile::Timed copying(profile::kItemSetup);
+            mine = seed;
+          }
+          got.serial = static_cast<uint64_t>(i) + 2;
+          got.next_id = got.serial << 40;
+          published = 0;
+        }
         {
           std::lock_guard<std::mutex> lock(gate);
           flight_item[me] = static_cast<long long>(i);
           flight_through[me] = 0;
         }
-        walk(item[i].node, item[i].trail, mine, deepest + 1, cap_each, tick, handing, &got);
+        walk(item[i].node, item[i].trail, mine, deepest + 1, cap_each, tick, handing, &got, &state);
+
+        if (state.paused && !save_dir.empty() && pressed.load()) {
+          const bool wrote = save_walk(i, mine, state, got, published);
+          std::lock_guard<std::mutex> lock(gate);
+          if (wrote) {
+            paused_items.push_back(i);
+          } else {
+            keep_failed = true;
+          }
+          paused_count.push_back(got.count);
+          paused_raw.insert(paused_raw.end(), got.raw.begin() + static_cast<long>(published),
+                            got.raw.end());
+          paused_kept.insert(paused_kept.end(), got.kept.begin(), got.kept.end());
+          flight[me] = Counters();
+          flight_kept[me].clear();
+          flight_item[me] = -1;
+          flight_through[me] = 0;
+          continue;
+        }
 
         std::lock_guard<std::mutex> lock(gate);
         Add::into(&found.count, got.count);
@@ -1780,15 +2258,48 @@ Found search_tree(const Question& question, const BaseTable& base, const Grid& g
 
     if (watch != nullptr) {
       for (;;) {
+        Report report;
         {
           std::lock_guard<std::mutex> lock(gate);
           if (pressed.load() || finished >= item.size()) break;
-          tell();
+          profile::Timed holding(profile::kReportHold);
+          gather(&report);
         }
+        tell(report);
+        profile::refresh();
         std::this_thread::sleep_for(std::chrono::milliseconds(kPollMs));
       }
     }
     for (size_t h = 0; h < walking.size(); ++h) walking[h].join();
+
+    /* The stopped run, written once every walk has kept its own: the totals without the walks in
+       flight, which carry their own. */
+    if (pressed.load() && !save_dir.empty() && !keep_failed && pausing->refused.empty()) {
+      checkpoint::Writer w(run_file(save_dir));
+      w.pod(kRunMagic);
+      w.pod(checkpoint::kVersion);
+      put_layout(w);
+      w.text(pausing->identity);
+      w.pod(static_cast<uint64_t>(found.quanta.slots));
+      w.pod(static_cast<uint64_t>(item.size()));
+      w.pod(static_cast<uint64_t>(std::min(next.load(), item.size())));
+      w.pod(static_cast<uint64_t>(finished));
+      w.pod(size_done);
+      w.pod(shown);
+      w.pod(seeded);
+      w.pod(found.count);
+      w.pod(found.exhausted);
+      w.pod(held_bytes.load());
+      w.pod(memory_full.load());
+      put(w, raw);
+      put(w, kept);
+      std::sort(paused_items.begin(), paused_items.end());
+      w.pods(paused_items);
+      pausing->saved = w.close();
+    }
+    for (size_t k = 0; k < paused_count.size(); ++k) Add::into(&found.count, paused_count[k]);
+    raw.insert(raw.end(), paused_raw.begin(), paused_raw.end());
+    kept.insert(kept.end(), paused_kept.begin(), paused_kept.end());
   }
 
   if (pressed.load()) found.exhausted = false;

@@ -4,12 +4,14 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <set>
 #include <tuple>
 #include <unordered_map>
 
 #include "catalogue.h"
+#include "profile.h"
 #include "engine/session.h"
 #include "engine/ps_mtx.h"
 #include "m_Do/m_Do_mtx.h"
@@ -49,6 +51,8 @@ struct Link {
   /** A move can seat a camera where the path had none. */
   bool has_camera = false;
   int cup_dir = 0;
+  /** Not driven: the moves from here on could no longer land. */
+  bool pruned = false;
 };
 
 Link step_through_engine(const BaseMove& row, const Edge& edge, const tww_engine::RoomDzb* room,
@@ -255,10 +259,17 @@ void remember_in(const tww_engine::RoomDzb* room) {
   }
 }
 
+/* `worth` is asked only before a move would be driven, and false leaves it undriven. */
 Link step_remembered(const BaseMove& row, const Edge& edge, const tww_engine::RoomDzb* room,
                      double x, double y, double z, int facing, int angle_x, int angle_z,
-                     const int* camera, int cup_dir, const cup_tape::Spot& camera_at) {
+                     const int* camera, int cup_dir, const cup_tape::Spot& camera_at,
+                     const std::function<bool()>* worth) {
   if (!drives.on || room == nullptr) {
+    if (worth != nullptr && !(*worth)()) {
+      Link cut;
+      cut.pruned = true;
+      return cut;
+    }
     return step_through_engine(row, edge, room, x, y, z, facing, angle_x, angle_z, camera,
                                cup_dir, &camera_at);
   }
@@ -285,21 +296,31 @@ Link step_remembered(const BaseMove& row, const Edge& edge, const tww_engine::Ro
   key.cx = f32_bits(camera_at.x);
   key.cy = f32_bits(camera_at.y);
   key.cz = f32_bits(camera_at.z);
+  profile::Timed looking(profile::kMemo, false);
   const std::unordered_map<DriveKey, Link, DriveKeyHash>::const_iterator at = drives.held.find(key);
+  looking.stop();
   if (at != drives.held.end()) {
     ++drives.count.hits;
     return at->second;
   }
+  if (worth != nullptr && !(*worth)()) {
+    Link cut;
+    cut.pruned = true;
+    return cut;
+  }
   ++drives.count.misses;
+  profile::Timed driving(profile::kDrive);
   const Link link =
       step_through_engine(row, edge, room, x, y, z, facing, angle_x, angle_z, camera, cup_dir,
                           &camera_at);
+  driving.stop();
   drives.held.emplace(key, link);
   return link;
 }
 
 Consult consult_path(const std::vector<Edge>& path, const Question& question,
-                     const BaseTable& base, const tww_engine::RoomDzb* room) {
+                     const BaseTable& base, const tww_engine::RoomDzb* room,
+                     const Model* model = nullptr, bool* pruned = nullptr) {
   remember_in(room);
   const cup_tape::Spot camera_at = camera_spot(question);
   Consult out;
@@ -323,8 +344,24 @@ Consult consult_path(const std::vector<Edge>& path, const Question& question,
       break;
     }
     const int* carried = has_camera ? &camera : 0;
+    /* Before a move is driven, whether the rest can still land from where the engine has him. */
+    const std::function<bool()> worth = [&]() {
+      profile::Timed aiming(profile::kReaim);
+      Pose here;
+      here.facing = facing;
+      here.camera = camera;
+      here.has_camera = has_camera;
+      here.cup_dir = cup_dir;
+      return can_still_land(question, *model, path, i, here, x, y, z);
+    };
     const Link link = step_remembered(base.move[at], path[i], room, x, y, z, facing, angle_x,
-                                      angle_z, carried, cup_dir, camera_at);
+                                      angle_z, carried, cup_dir, camera_at,
+                                      model != nullptr ? &worth : nullptr);
+    if (link.pruned) {
+      profile::add(profile::kReaimCut, 0);
+      if (pruned != nullptr) *pruned = true;
+      return out;
+    }
     out.engine_frames += link.engine_frames;
     if (!link.ran) {
       out.why = link.why;
@@ -415,7 +452,7 @@ double consults_per_confirmed(const VerifyCounters& count) {
 }
 
 Verified verify(const Found& found, const Question& question, const BaseTable& base,
-                const tww_engine::RoomDzb* room, Consulting* watch) {
+                const tww_engine::RoomDzb* room, Consulting* watch, const Model* model) {
   Verified out;
   out.greedy = question.greedy;
   if (room == nullptr) return out;
@@ -430,7 +467,10 @@ Verified verify(const Found& found, const Question& question, const BaseTable& b
       continue;
     }
 
-    const Consult one = consult_path(cand.path, question, base, room);
+    bool pruned = false;
+    const Consult one = consult_path(cand.path, question, base, room, model, &pruned);
+    /* Its remaining moves could not land: not a consult, as a state outside the near set is not. */
+    if (pruned) continue;
     Consult row = one;
     row.predicted = cand.distance;
     row.predicted_frames = cand.frames;

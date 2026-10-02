@@ -296,9 +296,48 @@ struct Watching {
  *  start to the target's middle, a freed axis staying at the start. */
 cup_tape::Spot camera_spot(const Question& q);
 
+/** The model's room and tables, so a verification can aim a plan's remaining moves from where the
+ *  engine put Link (`can_still_land`). */
+struct Model {
+  const BaseTable* base = nullptr;
+  const Grid* grid = nullptr;
+  const Selection* selection = nullptr;
+  /** Per table row, its calibration and plane table, either null. */
+  std::vector<const MoveCal*> cal_of;
+  std::vector<const PlaneTable*> plane_of;
+};
+
+Model model_for(const BaseTable& base, const Grid& grid, const Selection& selection,
+                const Calibration& cal);
+
+/** Whether `path`'s moves from `from` on, stepped by the model from `pose` at (`x`, `y`, `z`), can
+ *  still end within the tolerance plus those moves' own measured error: the near test, owing only
+ *  the moves not yet driven. True wherever the model cannot say (a move it hands to the engine, a
+ *  camera it cannot aim, an address target). */
+bool can_still_land(const Question& question, const Model& model, const std::vector<Edge>& path,
+                    size_t from, const Pose& pose, double x, double y, double z);
+
+/** Where a stopped run is kept and where a run carries on from (`checkpoint.h`). A run is kept only
+ *  when it is stopped: each walk in flight with its place, its dominance table and what it found,
+ *  and the run's totals. A resume continues those walks where they stood, so a run stopped and
+ *  resumed answers what one run straight through does. */
+struct Pausing {
+  /** A folder to keep a stopped run in, or empty. */
+  std::string save;
+  /** A folder a run was kept in, or empty. */
+  std::string resume;
+  /** What the question was, so a run is never resumed as another. Not the thread count. */
+  std::string identity;
+  /** Set when `resume` could not be used, with why; the run then does not start. */
+  std::string refused;
+  /** Set when the stopped run was written to `save`. */
+  bool saved = false;
+};
+
 Found search_tree(const Question& question, const BaseTable& base, const Grid& grid,
                   const Selection& selection, const Calibration& cal,
-                  const Stepper* instead = nullptr, Watching* watch = nullptr);
+                  const Stepper* instead = nullptr, Watching* watch = nullptr,
+                  Pausing* pausing = nullptr);
 
 /** The answer key: the sorted edges, so reorderings of the same moves collapse. */
 std::vector<Edge> canonical(const std::vector<Edge>& path);

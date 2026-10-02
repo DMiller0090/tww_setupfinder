@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <map>
@@ -26,9 +27,12 @@
 #include "../geom/mesh.h"
 #include "../search/approx.h"
 #include "../search/cam_clear.h"
+#include "../search/checkpoint.h"
 #include "../search/corridor.h"
+#include "../search/cup_exit.h"
 #include "../search/dzb.h"
 #include "../search/grid.h"
+#include "../search/profile.h"
 #include "../search/search.h"
 #include "../search/verify.h"
 #include "engine/link_assets.h"
@@ -669,7 +673,76 @@ void target_ground(const Out& out, const Json& request) {
   done(out);
 }
 
+/* What a search asks, without how many threads it may use or where it is kept: a kept run is only
+   carried on as the question it was. */
+std::string identity_of(const Json& request) {
+  Json out = Json::obj();
+  for (const char* key : {"start", "target", "facing", "steps", "fewest", "frames", "leastFrames",
+                          "tol", "moves", "costs", "collision", "bounds", "memoryUsage",
+                          "checkRange", "cameraChecks", "aim", "stage", "room", "iso", "pid"}) {
+    if (request.has(key)) out.set(key, request.at(key));
+  }
+  return out.dump();
+}
+
+void put_consult(checkpoint::Writer& w, const search::Consult& c) {
+  w.pods(c.path);
+  w.pod(static_cast<int32_t>(c.outcome));
+  w.text(c.why);
+  w.pod(c.x);
+  w.pod(c.y);
+  w.pod(c.z);
+  w.pod(c.aim_x);
+  w.pod(c.aim_z);
+  w.pod(c.aim_y);
+  w.pod(c.facing);
+  w.pod(c.frames);
+  w.pod(c.distance);
+  w.pod(c.predicted);
+  w.pod(c.predicted_frames);
+  w.pod(c.allowance);
+  w.pod(c.error);
+  w.pods(c.stop);
+  w.pod(c.had_camera);
+  w.pod(c.stated_frames);
+  w.pod(c.drives);
+  w.pod(c.engine_frames);
+}
+
+void get_consult(checkpoint::Reader& r, search::Consult* c) {
+  r.pods(&c->path);
+  c->outcome = static_cast<search::Outcome>(r.pod<int32_t>());
+  c->why = r.text();
+  c->x = r.pod<double>();
+  c->y = r.pod<double>();
+  c->z = r.pod<double>();
+  c->aim_x = r.pod<double>();
+  c->aim_z = r.pod<double>();
+  c->aim_y = r.pod<double>();
+  c->facing = r.pod<int>();
+  c->frames = r.pod<int>();
+  c->distance = r.pod<double>();
+  c->predicted = r.pod<double>();
+  c->predicted_frames = r.pod<int>();
+  c->allowance = r.pod<double>();
+  c->error = r.pod<double>();
+  r.pods(&c->stop);
+  c->had_camera = r.pod<bool>();
+  c->stated_frames = r.pod<int>();
+  c->drives = r.pod<int>();
+  c->engine_frames = r.pod<long long>();
+}
+
+const uint32_t kSeamMagic = 0x4D414553;  // "SEAM"
+
 void search_run(const Out& out, const Json& request) {
+  /* Profiled only when the settings folder holds `profile.on`; never shown on a surface. */
+  struct Profiled {
+    bool on;
+    ~Profiled() {
+      if (on) profile::end();
+    }
+  } profiled{profile::begin_if_asked(settings::folder())};
   if (!link_ready(out, request)) return;
   World world;
   if (!world_of(out, request, &world)) return;
@@ -893,6 +966,8 @@ void search_run(const Out& out, const Json& request) {
     const search::Question* q;
     const search::BaseTable* base;
     const tww_engine::RoomDzb* room;
+    /* So a plan's remaining moves are aimed from where the engine put Link before each drive. */
+    const search::Model* model = nullptr;
     size_t most = 20;
     std::chrono::steady_clock::time_point began;
     std::chrono::steady_clock::time_point last;
@@ -933,7 +1008,9 @@ void search_run(const Out& out, const Json& request) {
         }
         ever[key] = from[i];
       }
-      if (ever.size() <= keep_ever) return;
+      /* Trimmed once it doubles, not on every plan: the lock is held while it ranks them, and
+         only the furthest misses go, so the plans shown are the same. */
+      if (ever.size() <= 2 * keep_ever) return;
       // Over the cap: drop the furthest misses, in the same order `plans` ranks them.
       std::vector<std::pair<std::pair<double, double>, const std::vector<search::Edge>*> >
           by_distance;
@@ -955,7 +1032,7 @@ void search_run(const Out& out, const Json& request) {
 
     /** Takes `books` itself; callers are on the reporting thread while walkers write. */
     std::string driven() {
-      std::lock_guard<std::mutex> lock(books);
+      const std::unique_lock<std::mutex> lock = take_books();
       search::Verified all;
       // Path order makes ties independent of walker timing.
       std::vector<search::Consult> driven_so_far;
@@ -1108,6 +1185,75 @@ void search_run(const Out& out, const Json& request) {
        runs outside it; the engine keeps one player per thread and needs no lock. */
     std::mutex books;
 
+    /** Writes the driven plans, the paths already driven and the figures, for a kept run. */
+    bool keep(const std::string& path) {
+      const std::unique_lock<std::mutex> lock = take_books();
+      checkpoint::Writer w(path);
+      w.pod(kSeamMagic);
+      w.pod(checkpoint::kVersion);
+      w.pod(static_cast<uint64_t>(ever.size()));
+      for (std::map<std::vector<search::Edge>, search::Consult>::const_iterator it = ever.begin();
+           it != ever.end(); ++it) {
+        put_consult(w, it->second);
+      }
+      uint64_t taken = 0;
+      for (size_t i = 0; i < tried.slot.size(); ++i) taken += tried.slot[i].taken ? 1 : 0;
+      w.pod(taken);
+      for (size_t i = 0; i < tried.slot.size(); ++i) {
+        if (!tried.slot[i].taken) continue;
+        w.pod(static_cast<uint64_t>(i));
+        w.pods(tried.slot[i].path);
+      }
+      w.pod(spent);
+      w.pod(verified.load());
+      w.pod(engine_ns.load());
+      w.pod(std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count());
+      return w.close();
+    }
+
+    /** Takes back what `keep` wrote; the clock is set back by the time the kept run had spent. */
+    bool take(const std::string& path) {
+      checkpoint::Reader r(path);
+      if (r.pod<uint32_t>() != kSeamMagic || r.pod<uint32_t>() != checkpoint::kVersion) {
+        return false;
+      }
+      const uint64_t plans = r.pod<uint64_t>();
+      if (!r.ok() || plans > (uint64_t(1) << 24)) return false;
+      for (uint64_t k = 0; k < plans; ++k) {
+        search::Consult c;
+        get_consult(r, &c);
+        if (!r.ok()) return false;
+        landed[landing_of(c)] = c.path;
+        ever[c.path] = c;
+      }
+      const uint64_t taken = r.pod<uint64_t>();
+      if (!r.ok() || taken > tried.slot.size()) return false;
+      for (uint64_t k = 0; k < taken; ++k) {
+        const uint64_t i = r.pod<uint64_t>();
+        std::vector<search::Edge> one;
+        r.pods(&one);
+        if (!r.ok() || i >= tried.slot.size()) return false;
+        tried.slot[static_cast<size_t>(i)].path = one;
+        tried.slot[static_cast<size_t>(i)].taken = true;
+      }
+      spent = r.pod<search::VerifyCounters>();
+      verified.store(r.pod<long long>());
+      engine_ns.store(r.pod<long long>());
+      const double elapsed = r.pod<double>();
+      if (!r.ok()) return false;
+      began -= std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+          std::chrono::duration<double>(elapsed));
+      return true;
+    }
+
+    /** `books`, with the wait timed when the search is profiled. */
+    std::unique_lock<std::mutex> take_books() {
+      const uint64_t asked = profile::on() ? profile::cycles() : 0;
+      std::unique_lock<std::mutex> lock(books);
+      if (asked != 0) profile::add(profile::kPlansWait, profile::cycles() - asked);
+      return lock;
+    }
+
     /** Order matters: two orders of the same moves can land differently. */
     bool fresh_path(const std::vector<search::Edge>& path) {
       return tried.insert(path);
@@ -1132,15 +1278,26 @@ void search_run(const Out& out, const Json& request) {
       if (stop_asked()) return;
       {
         // Test and claim together, so two walkers cannot both drive it.
-        std::lock_guard<std::mutex> lock(books);
+        const std::unique_lock<std::mutex> lock = take_books();
         if (!fresh_path(one.path)) return;
       }
       search::Found just;
       just.candidate.push_back(one);
       const std::chrono::steady_clock::time_point from = std::chrono::steady_clock::now();
-      const search::Verified said = search::verify(just, *q, *base, room);
+      profile::Timed checking(profile::kEngine);
+      const search::Verified said = search::verify(just, *q, *base, room, nullptr, model);
+      checking.stop();
+      if (profile::on() && !said.consult.empty() &&
+          said.consult[0].outcome != search::Outcome::CouldNotRun) {
+        double ax = 0, az = 0;
+        search::aim_point(*q, one.x, one.z, one.facing, &ax, &az);
+        const bool sloped = one.allowance > 0.0;
+        const search::Consult& ran = said.consult[0];
+        if (q->target.has_x) profile::engine_miss(0, ax, ran.aim_x, one.consult, sloped);
+        if (q->target.has_z) profile::engine_miss(1, az, ran.aim_z, one.consult, sloped);
+      }
       engine_spent(from, 1);
-      std::lock_guard<std::mutex> lock(books);
+      const std::unique_lock<std::mutex> lock = take_books();
       spend(said.count);
       remember(said.consult);
     }
@@ -1150,7 +1307,7 @@ void search_run(const Out& out, const Json& request) {
     void so_far(const search::Found& run) {
       search::Found fresh;
       {
-        std::lock_guard<std::mutex> lock(books);
+        const std::unique_lock<std::mutex> lock = take_books();
         for (size_t i = 0; i < run.closest.size(); ++i) {
           if (!fresh_path(run.closest[i].path)) continue;
           fresh.closest.push_back(run.closest[i]);
@@ -1158,9 +1315,11 @@ void search_run(const Out& out, const Json& request) {
       }
       if (!fresh.closest.empty()) {
         const std::chrono::steady_clock::time_point from = std::chrono::steady_clock::now();
+        profile::Timed checking(profile::kEngine);
         const search::Verified said = search::verify(fresh, *q, *base, room);
+        checking.stop();
         engine_spent(from, static_cast<long long>(fresh.closest.size()));
-        std::lock_guard<std::mutex> lock(books);
+        const std::unique_lock<std::mutex> lock = take_books();
         spend(said.count);
         remember(said.closest);
       }
@@ -1177,7 +1336,7 @@ void search_run(const Out& out, const Json& request) {
                                 static_cast<size_t>(sofar.count.discarded) >= of;
       if (!last_one && !due()) return true;
       {
-        std::lock_guard<std::mutex> lock(books);
+        const std::unique_lock<std::mutex> lock = take_books();
         remember(sofar.consult);
         remember(sofar.closest);
       }
@@ -1198,9 +1357,45 @@ void search_run(const Out& out, const Json& request) {
   telling.last_table = telling.began;
   telling.every_ms = kTellMs;
   telling.most = kPlansSent;
+  const search::Model model = search::model_for(base, grid, selection, cal);
+  telling.model = &model;
+
+  /* A stopped run kept for a test to carry on: `checkpoint.on` in the settings folder keeps the
+     latest in `checkpoint` beside it; a request may name its own `save` and `resume` folders. */
+  search::Pausing pausing;
+  std::string keep_at = request.at("save").as_str();
+  if (keep_at.empty()) {
+    const std::string folder = settings::folder();
+    std::error_code ec;
+    if (!folder.empty() &&
+        std::filesystem::exists(std::filesystem::path(folder) / "checkpoint.on", ec)) {
+      keep_at = (std::filesystem::path(folder) / "checkpoint").string();
+    }
+  }
+  pausing.identity = identity_of(request);
+  pausing.resume = request.at("resume").as_str();
+  if (!pausing.resume.empty()) {
+    const std::filesystem::path from(pausing.resume);
+    cup_exit::load_rows((from / "rows.bin").string());
+    if (!telling.take((from / "seam.bin").string())) {
+      fail(out, "the kept run will not read");
+      return;
+    }
+  }
+  if (!keep_at.empty()) {
+    std::error_code ec;
+    const bool same = !pausing.resume.empty() &&
+                      std::filesystem::equivalent(keep_at, pausing.resume, ec);
+    pausing.save = checkpoint::begin_folder(keep_at, same);
+  }
 
   const search::Found found =
-      search::search_tree(q, base, grid, selection, cal, nullptr, &telling);
+      search::search_tree(q, base, grid, selection, cal, nullptr, &telling, &pausing);
+  if (!pausing.refused.empty()) {
+    if (!keep_at.empty()) checkpoint::drop_folder(keep_at);
+    fail(out, pausing.refused);
+    return;
+  }
   // For a walk that ended before its first table report.
   telling.walked_states = found.count.generated;
   // The last pass drives only plans no report has driven yet.
@@ -1220,7 +1415,9 @@ void search_run(const Out& out, const Json& request) {
     rest.closest.push_back(found.closest[i]);
   }
   const std::chrono::steady_clock::time_point last_from = std::chrono::steady_clock::now();
-  const search::Verified said = search::verify(rest, q, base, &dzb, &telling);
+  profile::Timed checking(profile::kEngine);
+  const search::Verified said = search::verify(rest, q, base, &dzb, &telling, &model);
+  checking.stop();
   telling.engine_spent(last_from,
                        static_cast<long long>(rest.candidate.size() + rest.closest.size()));
   if (q.camera_clear != nullptr) search::cam_keep(camera_field, camera_cache);
@@ -1231,6 +1428,16 @@ void search_run(const Out& out, const Json& request) {
   telling.spend(said.count);
   telling.remember(said.consult);
   telling.remember(said.closest);
+  if (!keep_at.empty()) {
+    const std::filesystem::path into(pausing.save);
+    const bool kept = pausing.saved && telling.keep((into / "seam.bin").string()) &&
+                      cup_exit::save_rows(search::camera_spot(q), (into / "rows.bin").string());
+    if (kept) {
+      checkpoint::finish_folder(keep_at);
+    } else {
+      checkpoint::drop_folder(keep_at);
+    }
+  }
   Json body = Json::obj();
   body.set("plans", Json::raw(telling.driven()));
   body.set("pct", Json::num(stop_asked() ? telling.shown_pct : 100));
@@ -1331,6 +1538,7 @@ void answer(const std::string& request, const Out& out) {
 
 int run() {
   const Out out = [](const std::string& line) {
+    profile::Timed writing(profile::kWrite);
     std::fwrite(line.data(), 1, line.size(), stdout);
     std::fputc('\n', stdout);
     std::fflush(stdout);

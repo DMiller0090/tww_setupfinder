@@ -109,6 +109,8 @@ int run_taps(const void* p) {
 
 }  // namespace
 
+static_assert(kTaps == cup_exit::kChainTaps, "the kept rows hold every tap count");
+
 bool cdown_at(const cup_tape::Spot& at, int facing, int dir, int taps, int* csangle, int* frames) {
   facing &= 0xFFFF;
   int f = 0;
@@ -116,7 +118,7 @@ bool cdown_at(const cup_tape::Spot& at, int facing, int dir, int taps, int* csan
   cup_exit::Leave l;
   if (!cup_exit::leave(facing, dir, cup_exit::Way::CDown, &l)) return false;
   const TapArgs args = {at, facing, dir, l.wait, taps};
-  const int v = cup_exit::kept(cup_exit::key('t', at, facing, dir, taps), run_taps, &args);
+  const int v = cup_exit::kept(at, cup_exit::Kept::Taps, facing, dir, taps, run_taps, &args);
   if (v < 0) return false;
   if (csangle) *csangle = v & 0xFFFF;
   if (frames) *frames = f;

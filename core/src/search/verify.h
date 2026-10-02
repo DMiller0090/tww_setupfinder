@@ -98,9 +98,12 @@ struct Consulting {
   virtual bool consulted(const Verified& sofar, size_t of) = 0;
 };
 
-/** `room` must be the collision the candidates were searched over, and not null. */
+/** `room` must be the collision the candidates were searched over, and not null. With `model`,
+ *  a candidate is driven only while its remaining moves can still land (`can_still_land`); one
+ *  that cannot is not a consult, as one outside the near set is not. */
 Verified verify(const Found& found, const Question& question, const BaseTable& base,
-                const tww_engine::RoomDzb* room, Consulting* watch = nullptr);
+                const tww_engine::RoomDzb* room, Consulting* watch = nullptr,
+                const Model* model = nullptr);
 
 /** This thread's drive memo: a move driven from the same inputs is read back, not re-driven. */
 struct DriveMemo {

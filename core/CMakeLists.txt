@@ -89,6 +89,8 @@ add_library(setupcore_lib STATIC
   src/search/approx.cpp
   src/search/search.cpp
   src/search/verify.cpp
+  src/search/profile.cpp
+  src/search/checkpoint.cpp
   ${DOLPHIN_PLATFORM}
   ${MACHINE_PLATFORM}
 )
