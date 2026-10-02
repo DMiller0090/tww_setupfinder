@@ -23,9 +23,9 @@ struct Running {
     stdout: BufReader<ChildStdout>,
 }
 
-/// Started lazily on the first request. `running` serialises requests (the protocol has no ids);
-/// `sending` is separate so `signal` can write while a request is waiting on its answer.
-/// Lock order is `running` then `sending`.
+/// Started on the first request, and on the first after it dies. `running` serialises requests
+/// (the protocol has no ids); `sending` is separate so `signal` can write while a request is
+/// waiting on its answer. Lock order is `running` then `sending`.
 #[derive(Default)]
 pub struct Core {
     running: Mutex<Option<Running>>,
@@ -79,6 +79,12 @@ pub fn ask(app: AppHandle, core: State<'_, Core>, id: String, request: String) -
         return Err("a request cannot contain a newline".into());
     }
     let mut held = core.running.lock().map_err(|_| "the core's lock is poisoned".to_string())?;
+    // A core that died since the last request is replaced first, so this request does not fail.
+    if let Some(running) = held.as_mut() {
+        if matches!(running.child.try_wait(), Ok(Some(_))) {
+            *held = None;
+        }
+    }
     if held.is_none() {
         let (mut running, stdin) = spawn()?;
         // Kill the child if its stdin cannot be stored, or it is orphaned.
