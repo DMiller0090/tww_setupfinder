@@ -60,8 +60,9 @@ export type AskedTarget =
      mask?: {x: Array<number | null>; y: Array<number | null>; z: Array<number | null>};
      /* Cuts the region the core keeps, never the box above, which the corridor is laid over. */
      within?: {x0: number; x1: number; z0: number; z1: number}}
-  /* Each row a point, as x, z pairs; the goal is the nearest of them. */
-  | {shape: 'list'; rows: number[]};
+  /* Each row a point, as x, z pairs; the goal is the nearest of them. An axis `null` in every
+     row is freed. */
+  | {shape: 'list'; rows: Array<number | null>};
 
 /** `done` ends the stream; `fail` ends it badly. Anything else is progress. */
 export type Line =

@@ -258,7 +258,9 @@
       }
     } else if (settings.shape === 'list') {
       const points = rows(settings.list).map(r => ({x: r.x, z: r.z}));
-      if (points.length) mark = {kind: 'list' as const, points};
+      if (points.length) {
+        mark = {kind: 'list' as const, points, tol: Math.max(0, n(settings.tol) ?? 0)};
+      }
     } else {
       /* Cut to the Range box when checked, as the core cuts the region. */
       const whole = addrHull();
@@ -401,7 +403,9 @@
       target: aimAt,
       /* Absent means any facing. */
       ...(marks.facing ? {facing: marks.facing} : {}),
-      asked: {box, tol: Math.max(0, n(settings.tol) ?? 0), aim: settings.aim},
+      asked: {box, tol: Math.max(0, n(settings.tol) ?? 0), aim: settings.aim,
+              ...(settings.shape === 'list' && settings.list.l >= 0
+                    ? {rows: rows(settings.list)} : {})},
       /* A span from 1 also reports the start, which is a plan of no moves. */
       steps: Math.max(1, settings.steps), fewest: settings.fewest > 1 ? settings.fewest : 0,
       frames: Math.max(0, settings.frames),

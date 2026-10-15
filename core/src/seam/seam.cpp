@@ -496,13 +496,25 @@ bool is_log(const std::string& line) {
 void target_of(const Json& request, search::Target* into) {
   const Json& target = request.at("target");
   if (target.at("shape").as_str() == "list") {
-    // x, z pairs; a pair with a non-number is dropped whole.
+    // x, z pairs. An axis no row gives a number for is freed; otherwise a pair with a
+    // non-number is dropped whole.
     const Json& rows = target.at("rows");
     const std::vector<Json> none;
     const std::vector<Json>& it = rows.type() == Json::Type::Arr ? rows.items() : none;
+    into->has_x = into->has_z = false;
     for (size_t i = 0; i + 1 < it.size(); i += 2) {
-      if (it[i].type() != Json::Type::Num || it[i + 1].type() != Json::Type::Num) continue;
-      const double x = coordinate(it[i]), z = coordinate(it[i + 1]);
+      into->has_x = into->has_x || it[i].type() == Json::Type::Num;
+      into->has_z = into->has_z || it[i + 1].type() == Json::Type::Num;
+    }
+    // Both freed has no distance to order by; no row takes.
+    if (!into->has_x && !into->has_z) into->has_x = into->has_z = true;
+    for (size_t i = 0; i + 1 < it.size(); i += 2) {
+      if ((into->has_x && it[i].type() != Json::Type::Num) ||
+          (into->has_z && it[i + 1].type() != Json::Type::Num)) {
+        continue;
+      }
+      const double x = into->has_x ? coordinate(it[i]) : 0.0;
+      const double z = into->has_z ? coordinate(it[i + 1]) : 0.0;
       if (into->list.empty()) {
         into->x0 = into->x1 = x;
         into->z0 = into->z1 = z;

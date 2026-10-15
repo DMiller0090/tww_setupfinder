@@ -95,7 +95,8 @@ struct Target {
   double x0 = 0, x1 = 0, z0 = 0, z1 = 0;
 
   /** A list's rows as x, z pairs, each row a point of the goal. `ranged` is set and the range is
-   *  their box, which the corridor is laid over; the region is only the rows. */
+   *  their box, which the corridor is laid over; the region is only the rows. On a freed axis
+   *  every row holds 0 there and matches every value of it. */
   std::vector<double> list;
 
   /* Only an address has a height. */

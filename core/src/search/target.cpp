@@ -902,8 +902,10 @@ bool resolve(Target* target, const Grid& grid, const std::vector<float>& ground,
     const auto clamp = [](int c, int n) { return std::max(0, std::min(n - 1, c)); };
     for (size_t r = 0; r + 1 < target->list.size(); r += 2) {
       if (stop != nullptr && (*stop)()) { kept = Region(); return false; }
-      const Span sx{target->list[r] - w, target->list[r] + w};
-      const Span sz{target->list[r + 1] - w, target->list[r + 1] + w};
+      /* A freed axis spans the room, as a point's does. */
+      const Span sx = target->has_x ? Span{target->list[r] - w, target->list[r] + w} : Span{x0, x1};
+      const Span sz = target->has_z ? Span{target->list[r + 1] - w, target->list[r + 1] + w}
+                                    : Span{z0, z1};
       const int cx0 = clamp(grid_column(sx.lo, grid.origin_x, grid.cell, grid.nx), grid.nx);
       const int cx1 = clamp(grid_column(sx.hi, grid.origin_x, grid.cell, grid.nx), grid.nx);
       const int cz0 = clamp(grid_column(sz.lo, grid.origin_z, grid.cell, grid.nz), grid.nz);
@@ -1356,11 +1358,12 @@ void Target::nearest(double px, double pz, double* nx, double* nz) const {
   if (!list.empty()) {
     double best = std::numeric_limits<double>::infinity();
     for (size_t i = 0; i + 1 < list.size(); i += 2) {
-      const double dx = px - list[i], dz = pz - list[i + 1];
+      const double rx = has_x ? list[i] : px, rz = has_z ? list[i + 1] : pz;
+      const double dx = px - rx, dz = pz - rz;
       if (dx * dx + dz * dz < best) {
         best = dx * dx + dz * dz;
-        *nx = list[i];
-        *nz = list[i + 1];
+        *nx = rx;
+        *nz = rz;
       }
     }
     return;

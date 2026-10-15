@@ -2,7 +2,7 @@
      does not clip the last ones. -->
 <script lang="ts">
   import {t} from '../lib/strings';
-  import {run, shown, reaches, aimsAtItem, planId, type Plan}
+  import {run, shown, reaches, aimsAtItem, planId, labelOf, type Plan}
     from '../core/run.svelte';
   import {showFacing} from '../lib/facing.svelte';
   import {gutter} from './rail';
@@ -12,6 +12,8 @@
   let copied = $state(false);
 
   const rows = $derived(shown());
+  /* Only a run whose List has a Label column has the column. */
+  const labelled = $derived(!!run.asked.rows?.length);
 
   /* Off is in float steps to the nearest allowed place, not units, so near misses are not 0. */
   const showOff = (p: Plan): string =>
@@ -43,7 +45,9 @@
     const cells: string[][] = p.stops.map(s =>
       [s.move.n, s.frames, s.total, s.x, s.z, showFacing(s.f)].map(String));
     if (aimsAtItem()) cells.push([t.item, '', '', String(p.x), String(p.z), '']);
-    const text = aligned(cells);
+    /* The label heads the copy; a blank one adds no line. */
+    const label = labelOf(p);
+    const text = (label ? label + '\n' : '') + aligned(cells);
     copied = await copy(text);
     if (copied) setTimeout(() => { copied = false; }, 1200);
   }
@@ -59,9 +63,16 @@
     </div>
     <div class="body" style="padding:0">
       <table>
-        <colgroup><col style="width:9%"><col style="width:11%"><col style="width:30%"
-          ><col style="width:20%"><col style="width:20%"><col style="width:10%"></colgroup>
+        {#if labelled}
+          <colgroup><col style="width:12%"><col style="width:8%"><col style="width:10%"
+            ><col style="width:26%"><col style="width:17%"><col style="width:17%"
+            ><col style="width:10%"></colgroup>
+        {:else}
+          <colgroup><col style="width:9%"><col style="width:11%"><col style="width:30%"
+            ><col style="width:20%"><col style="width:20%"><col style="width:10%"></colgroup>
+        {/if}
         <thead><tr>
+          {#if labelled}<th scope="col">{t.label}</th>{/if}
           <th scope="col" class="n">{t.frames}</th>
           <th scope="col" class="n">{t.off}</th>
           <th scope="col">{t.moves}</th>
@@ -84,6 +95,7 @@
                 onkeydown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); run.chosen = p; }
                 }}>
+              {#if labelled}<td class="mv">{labelOf(p) || t.dash}</td>{/if}
               <td class="n">{p.frames}</td>
               <td class="n off">{showOff(p)}</td>
               <td class="mv">{names || t.dash}</td>

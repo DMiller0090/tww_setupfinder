@@ -45,6 +45,8 @@ export const t = {
   range: 'Range',
   address: 'Address',
   list: 'List',
+  /** A List column's own text, carried onto each plan that reaches its row. */
+  label: 'Label',
   /** The Target panel's count of imported rows; pressing it reopens the preview. */
   rowsCount: (n: number): string => n === 1 ? '1 row' : `${n.toLocaleString()} rows`,
   importWord: 'Import',

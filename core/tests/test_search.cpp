@@ -657,6 +657,18 @@ void list_tests() {
   search::Target none = listed({150, 0, 180, 40});
   ok(!search::resolve(&none, g, s.ground, 5.0),
      "a list with no row on any floor is refused, the same as a point with none");
+
+  /* X freed: each row is its Z across the room. */
+  search::Target lines = listed({0, -100, 0, 60});
+  lines.has_x = false;
+  ok(lines.distance(170.0, -90.0) == 10.0,
+     "RED: a list with X freed measures Z alone, to the nearest row");
+  ok(search::resolve(&lines, g, s.ground, 5.0) && lines.distance(-180.0, 60.0) == 0.0 &&
+         lines.distance(-10.0, -100.0) == 0.0,
+     "RED: a freed axis keeps the floor along the row's whole line, not only beside the 0 it holds");
+  lines.nearest(-150.0, 50.0, &nx, &nz);
+  ok(std::fabs(nx + 150.0) < 1e-9 && std::fabs(nz - 55.0) < 1e-9,
+     "the nearest place keeps the freed coordinate");
 }
 
 void ground_tests() {

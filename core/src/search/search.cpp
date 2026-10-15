@@ -82,6 +82,7 @@ void item_point(double x, double y, double z, int angle_x, int shape_y, int angl
    item gate holds that). */
 std::vector<uint8_t> item_facings(const Question& q) {
   const Target& t = q.target;
+  /* Potential todo (REVIEW_LOG 94.3): a list could take the union of its rows' tables. */
   if (q.aim != Aim::Overhead || q.tolerance != 0.0 || t.ranged || !t.list.empty() ||
       t.mask.any() || (!t.has_x && !t.has_z)) {
     return std::vector<uint8_t>();

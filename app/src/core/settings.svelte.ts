@@ -223,8 +223,9 @@ function takeQuestion(kept: Question, keepStart: boolean): void {
   settings.list = aList(kept.list) ?? settings.list;
 }
 
+/* A list kept before Label existed has no `l`. */
 const copyList = (l: List): List =>
-  ({cells: l.cells.map(r => r.slice()), head: l.head, x: l.x, z: l.z, f: l.f});
+  ({cells: l.cells.map(r => r.slice()), head: l.head, x: l.x, z: l.z, f: l.f, l: l.l ?? -1});
 
 /** All or nothing, as the address is: a list with a bad cell or column is dropped. */
 function aList(v: unknown): List | null {
@@ -233,7 +234,9 @@ function aList(v: unknown): List | null {
     return null;
   }
   if (!l.cells.every(r => Array.isArray(r) && r.every(c => typeof c === 'string'))) return null;
-  if (!ROLES.every(r => Number.isInteger(l[r]) && l[r] >= -1)) return null;
+  if (!ROLES.every(r => (r === 'l' && l[r] === undefined) || (Number.isInteger(l[r]) && l[r] >= -1))) {
+    return null;
+  }
   return copyList(l);
 }
 

@@ -19,8 +19,9 @@ export type TargetMark =
   | {kind: 'range'; x0: number | null; x1: number | null; z0: number | null; z1: number | null;
      /** The hull of an address's bytes, not the target: drawn dashed, never filled or posted. */
      address?: boolean}
-  /** A List's rows, each drawn as a dot on the floor under it. */
-  | {kind: 'list'; points: {x: number; z: number}[]};
+  /** A List's rows, each drawn as a dot on the floor under it. An axis `null` in every row is
+   *  freed, and each row is drawn as a point target with that axis free is. */
+  | {kind: 'list'; points: {x: number | null; z: number | null}[]; tol: number};
 
 export interface BoundsMark {
   open: Record<Side, boolean>;
@@ -289,6 +290,31 @@ export function build(marks: Marks, box: THREE.Box3,
     return new THREE.Vector3(x, ty, z);
   }
 
+  /** One axis free: a strip across the room at `at` on the other, a line with no tolerance. */
+  function band(freeX: boolean, at: number, tol: number): void {
+    const ends = (lo: number, hi: number): [number, number] =>
+      empty ? [-900, 900] : [lo - 120, hi + 120];
+    const e = freeX ? ends(box.min.x, box.max.x) : ends(box.min.z, box.max.z);
+    const by = stand(freeX ? (e[0] + e[1]) / 2 : at, freeX ? at : (e[0] + e[1]) / 2) + 1;
+    if (tol > 0) {
+      const x0 = freeX ? e[0] : at - tol;
+      const x1 = freeX ? e[1] : at + tol;
+      const z0 = freeX ? at - tol : e[0];
+      const z1 = freeX ? at + tol : e[1];
+      add(quad(x0, x1, z0, z1, by, fillMat(tc, 0.16)));
+      add(polyline([
+        new THREE.Vector3(x0, by, z0), new THREE.Vector3(x1, by, z0),
+        new THREE.Vector3(x1, by, z1), new THREE.Vector3(x0, by, z1),
+      ], dashMat(tc, 1, dash), true));
+    } else {
+      /* No tolerance is a line, not a zero-width strip. */
+      add(polyline(freeX
+        ? [new THREE.Vector3(e[0], by, at), new THREE.Vector3(e[1], by, at)]
+        : [new THREE.Vector3(at, by, e[0]), new THREE.Vector3(at, by, e[1])],
+        dashMat(tc, 1, dash)));
+    }
+  }
+
   /* The target's middle, where the facing arc hangs. */
   let aim: THREE.Vector3 | null = null;
   const tm = marks.target;
@@ -352,37 +378,23 @@ export function build(marks: Marks, box: THREE.Box3,
     const free = {x: tm.x === null, z: tm.z === null};
     const midX = empty ? 0 : (box.min.x + box.max.x) / 2;
     const midZ = empty ? 0 : (box.min.z + box.max.z) / 2;
-    const ends = (lo: number, hi: number, mid: number): [number, number] =>
-      empty ? [mid - 900, mid + 900] : [lo - 120, hi + 120];
     /* Both axes free has no shape to draw. */
-    if (free.x !== free.z) {
-      const e = free.x ? ends(box.min.x, box.max.x, midX) : ends(box.min.z, box.max.z, midZ);
-      const at = free.x ? (tm.z as number) : (tm.x as number);
-      const by = stand(free.x ? (e[0] + e[1]) / 2 : at, free.x ? at : (e[0] + e[1]) / 2) + 1;
-      if (tm.tol > 0) {
-        const x0 = free.x ? e[0] : at - tm.tol;
-        const x1 = free.x ? e[1] : at + tm.tol;
-        const z0 = free.x ? at - tm.tol : e[0];
-        const z1 = free.x ? at + tm.tol : e[1];
-        add(quad(x0, x1, z0, z1, by, fillMat(tc, 0.16)));
-        add(polyline([
-          new THREE.Vector3(x0, by, z0), new THREE.Vector3(x1, by, z0),
-          new THREE.Vector3(x1, by, z1), new THREE.Vector3(x0, by, z1),
-        ], dashMat(tc, 1, dash), true));
-      } else {
-        /* No tolerance is a line, not a zero-width strip. */
-        add(polyline(free.x
-          ? [new THREE.Vector3(e[0], by, at), new THREE.Vector3(e[1], by, at)]
-          : [new THREE.Vector3(at, by, e[0]), new THREE.Vector3(at, by, e[1])],
-          dashMat(tc, 1, dash)));
-      }
-    }
+    if (free.x !== free.z) band(free.x, free.x ? (tm.z as number) : (tm.x as number), tm.tol);
     if (free.x && free.z) aim = new THREE.Vector3(midX, stand(midX, midZ), midZ);
     else aim = marker(free.x ? midX : (tm.x as number), free.z ? midZ : (tm.z as number), tm.tol);
+  } else if (tm && tm.kind === 'list' && tm.points.some(p => p.x === null || p.z === null)) {
+    for (const p of tm.points) {
+      if ((p.x === null) !== (p.z === null)) {
+        band(p.x === null, p.x === null ? (p.z as number) : (p.x as number), tm.tol);
+      }
+    }
   } else if (tm && tm.kind === 'list') {
     /* One draw for every row, at the ground's own screen-dot size; a row has no facing arc. */
     const at: number[] = [];
-    for (const p of tm.points) at.push(p.x, stand(p.x, p.z) + 2, p.z);
+    for (const p of tm.points) {
+      const x = p.x as number, z = p.z as number;
+      at.push(x, stand(x, z) + 2, z);
+    }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(at, 3));
     add(new THREE.Points(geo, new THREE.PointsMaterial({color: tc, size: 8,

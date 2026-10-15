@@ -1,8 +1,8 @@
-<!-- A List file's preview. X, Z and Facing each choose a column; the chosen ones are lit. -->
+<!-- A List file's preview. X, Z, Facing and Label each choose a column; the chosen ones are lit. -->
 <script lang="ts">
   import {t} from '../../lib/strings';
   import {place} from '../../lib/log.svelte';
-  import {give, rows, takes, ROLES, type List, type Role} from '../../core/list';
+  import {freed, give, holds, rows, ROLES, type List, type Role} from '../../core/list';
 
   let {open = $bindable(false), draft = $bindable(), take}:
     {open: boolean; draft: List; take: (list: List) => void} = $props();
@@ -21,8 +21,9 @@
   const width = $derived(Math.max(0, ...draft.cells.slice(0, SHOWN + 1).map(r => r.length)));
   const columns = $derived(Array.from({length: width}, (_, i) => i));
   const ready = $derived(rows(draft).length > 0);
+  const free = $derived(freed(draft));
 
-  const LABEL: Record<Role, string> = {x: t.x, z: t.z, f: t.facing};
+  const LABEL: Record<Role, string> = {x: t.x, z: t.z, f: t.facing, l: t.label};
   /* A column is named by the file: its header, or with none its first value. */
   const nameOf = (c: number): string => draft.cells[0]?.[c] ?? '';
   const chosen = (c: number): boolean => ROLES.some(r => draft[r] === c);
@@ -68,7 +69,7 @@
         {/if}
         <tbody style="font:400 .6875rem var(--mono)">
           {#each body as r, i (i)}
-            <tr style:opacity={takes(draft, r) ? null : '.42'}>
+            <tr style:opacity={holds(draft, free, r) ? null : '.42'}>
               {#each columns as c (c)}<td style:background={lit(c)}>{r[c] ?? ''}</td>{/each}</tr>
           {/each}
         </tbody>

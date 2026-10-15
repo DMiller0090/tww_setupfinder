@@ -3,6 +3,7 @@
 import {ask, stopRunning, type AskedBounds, type AskedTarget} from './ask';
 import {logLine} from '../lib/log.svelte';
 import {type Plan, type Stop} from './plans';
+import {type Row} from './list';
 
 export type Phase = 'design' | 'run' | 'done';
 export type Hit = 'exact' | 'hit' | 'miss';
@@ -13,6 +14,8 @@ export interface Asked {
   box: {x0: number | null; x1: number | null; z0: number | null; z1: number | null} | null;
   tol: number;
   aim: string;
+  /** A List's rows, present only when it has a Label column. */
+  rows?: Row[];
 }
 
 /** As many misses as the core sends. */
@@ -53,6 +56,19 @@ export function offDist(p: Plan): number {
 export function reaches(p: Plan): Hit {
   const near = p.reached ?? (run.asked.tol > 0 ? p.d <= run.asked.tol : p.off === 0);
   return near ? (p.off === 0 ? 'exact' : 'hit') : 'miss';
+}
+
+/** The label of the row nearest the plan's x/z, a freed axis unmeasured as in `target.cpp`;
+ *  `null` when the run's list has no Label column. The first row wins a tie. */
+export function labelOf(p: Plan): string | null {
+  const got = run.asked.rows;
+  if (!got || !got.length) return null;
+  let best = Infinity, label = '';
+  for (const r of got) {
+    const d = Math.hypot(r.x === null ? 0 : p.x - r.x, r.z === null ? 0 : p.z - r.z);
+    if (d < best) { best = d; label = r.label; }
+  }
+  return label;
 }
 
 /* `daDitem_c::set_pos`: the item rides a fixed offset turned by his facing. The core applies it. */
