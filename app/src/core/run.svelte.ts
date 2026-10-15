@@ -58,17 +58,13 @@ export function reaches(p: Plan): Hit {
   return near ? (p.off === 0 ? 'exact' : 'hit') : 'miss';
 }
 
-/** The label of the row nearest the plan's x/z, a freed axis unmeasured as in `target.cpp`;
- *  `null` when the run's list has no Label column. The first row wins a tie. */
+/** The label of the row the core counted the plan on (`Target::nearest_row`), so the label and the
+ *  per-row cap name one row; `null` when the run's list has no Label column. The rows are sent in
+ *  this order and none is dropped on the way. */
 export function labelOf(p: Plan): string | null {
   const got = run.asked.rows;
   if (!got || !got.length) return null;
-  let best = Infinity, label = '';
-  for (const r of got) {
-    const d = Math.hypot(r.x === null ? 0 : p.x - r.x, r.z === null ? 0 : p.z - r.z);
-    if (d < best) { best = d; label = r.label; }
-  }
-  return label;
+  return p.row !== undefined ? (got[p.row]?.label ?? '') : '';
 }
 
 /* `daDitem_c::set_pos`: the item rides a fixed offset turned by his facing. The core applies it. */

@@ -105,6 +105,7 @@ function asPlan(read: PlanRead): Plan {
   }));
   return {frames: read.frames, off: read.off, x: read.x, z: read.z, stops, d: read.d,
           ...(read.reached !== undefined ? {reached: read.reached} : {}),
+          ...(read.row !== undefined ? {row: read.row} : {}),
           ...(read.ox !== undefined && read.oz !== undefined ? {ox: read.ox, oz: read.oz} : {})};
 }
 

@@ -881,6 +881,8 @@ void search_run(const Out& out, const Json& request) {
       out.set("z", Json::f32(one.aim_z));
       out.set("d", Json::num(one.distance));
       out.set("reached", Json::boolean(one.outcome == search::Outcome::Confirmed));
+      // A list's row this plan is counted on, so the window names the same one.
+      if (!q.target.list.empty()) out.set("row", Json::num(q.target.nearest_row(one.aim_x, one.aim_z)));
       // Float steps to the nearest allowed place; a freed axis contributes nothing.
       double nx = 0, nz = 0;
       q.target.nearest(one.aim_x, one.aim_z, &nx, &nz);
@@ -919,13 +921,23 @@ void search_run(const Out& out, const Json& request) {
 
     /* Misses come from refuted consults and from `Verified::closest`, which fills the table when
        nothing got inside the tolerance. */
+    /* A list caps reaching plans per row, each counted on the row nearest its aim point. */
     static void take(const std::vector<search::Consult>& from, std::vector<size_t>* reach,
-                     std::vector<size_t>* miss, size_t most, size_t base_index) {
+                     std::vector<size_t>* miss, size_t most, size_t base_index,
+                     const search::Target& target, std::map<int, size_t>* per_row) {
       for (size_t i = 0; i < from.size(); ++i) {
         const search::Consult& one = from[i];
         if (one.outcome == search::Outcome::CouldNotRun) continue;
         if (one.outcome == search::Outcome::Confirmed) {
-          if (reach->size() < most) reach->push_back(base_index + i);
+          if (target.list.empty()) {
+            if (reach->size() < most) reach->push_back(base_index + i);
+          } else {
+            size_t& had = (*per_row)[target.nearest_row(one.aim_x, one.aim_z)];
+            if (had < most) {
+              ++had;
+              reach->push_back(base_index + i);
+            }
+          }
           continue;
         }
         miss->push_back(base_index + i);
@@ -937,11 +949,13 @@ void search_run(const Out& out, const Json& request) {
       std::vector<search::Consult> all = said.consult;
       all.insert(all.end(), said.closest.begin(), said.closest.end());
       std::vector<size_t> reach, miss;
-      take(said.consult, &reach, &miss, most, 0);
-      take(said.closest, &reach, &miss, most, said.consult.size());
+      std::map<int, size_t> per_row;
+      take(said.consult, &reach, &miss, most, 0, q.target, &per_row);
+      take(said.closest, &reach, &miss, most, said.consult.size(), q.target, &per_row);
       /* Ranked by float steps, the number shown, with distance only as a tie-break: the two do
-         not rank alike. */
-      const size_t room = most > reach.size() ? most - reach.size() : 0;
+         not rank alike. A list's misses stay `most` in all, however many rows reach. */
+      const size_t room = !q.target.list.empty() ? most
+                          : most > reach.size() ? most - reach.size() : 0;
       const size_t keep = room < miss.size() ? room : miss.size();
       if (keep > 0) {
         struct Closer {

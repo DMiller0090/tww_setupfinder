@@ -98,6 +98,8 @@ export interface PlanRead {
   z: number;
   d: number;
   reached?: boolean;
+  /** A List's row the plan is counted on; absent for any other target. */
+  row?: number;
   stops: Array<{id: string; steps: number; taps?: number; frames: number; total: number;
                 x: number; z: number; f: number; y?: number}>;
 }

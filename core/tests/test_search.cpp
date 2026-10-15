@@ -669,6 +669,12 @@ void list_tests() {
   lines.nearest(-150.0, 50.0, &nx, &nz);
   ok(std::fabs(nx + 150.0) < 1e-9 && std::fabs(nz - 55.0) < 1e-9,
      "the nearest place keeps the freed coordinate");
+  search::Target apart = listed({800, -100, -800, 60});
+  apart.has_x = false;
+  ok(apart.nearest_row(900.0, 40.0) == 1 && apart.nearest_row(-900.0, -70.0) == 0,
+     "RED: a plan's row is the nearest by the axes held, a freed axis unmeasured");
+  ok(three.nearest_row(-25.0, 40.0) == 1 && search::Target().nearest_row(0.0, 0.0) == -1,
+     "a row is counted by its point, and only a list has rows");
 }
 
 void ground_tests() {

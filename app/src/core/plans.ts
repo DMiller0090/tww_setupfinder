@@ -8,4 +8,6 @@ export interface Stop {move: {n: string; id: string; f: number}; frames: number;
                        taps: number}
 /** `ox` and `oz` are each axis's share of `off`. */
 export interface Plan {frames: number; off: number; ox?: number; oz?: number; x: number; z: number;
-                      stops: Stop[]; d: number; reached?: boolean}
+                      stops: Stop[]; d: number; reached?: boolean;
+                      /** A List's row the core counted it on. */
+                      row?: number}

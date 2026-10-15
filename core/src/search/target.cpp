@@ -1377,6 +1377,19 @@ void Target::nearest(double px, double pz, double* nx, double* nz) const {
   *nz = has_z ? z : pz;
 }
 
+int Target::nearest_row(double px, double pz) const {
+  int row = -1;
+  double best = std::numeric_limits<double>::infinity();
+  for (size_t i = 0; i + 1 < list.size(); i += 2) {
+    const double dx = has_x ? px - list[i] : 0.0, dz = has_z ? pz - list[i + 1] : 0.0;
+    if (dx * dx + dz * dz < best) {
+      best = dx * dx + dz * dz;
+      row = static_cast<int>(i / 2);
+    }
+  }
+  return row;
+}
+
 void Target::extent(const float room[6], double* min_x, double* min_z, double* max_x,
                     double* max_z) const {
   if (ranged) {

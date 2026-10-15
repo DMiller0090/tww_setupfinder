@@ -136,6 +136,10 @@ struct Target {
   /** The nearest point of the goal; a freed axis answers the place's own coordinate. */
   void nearest(double px, double pz, double* nx, double* nz) const;
 
+  /** A list's row nearest a place, by its row point and not the floor; the first wins a tie. -1
+   *  for anything but a list. */
+  int nearest_row(double px, double pz) const;
+
   /** The least `distance` from anywhere in an xz box to the goal; zero where they meet. */
   double box_gap(double x_lo, double x_hi, double z_lo, double z_hi) const {
     double tx_lo = x, tx_hi = x, tz_lo = z, tz_hi = z;
