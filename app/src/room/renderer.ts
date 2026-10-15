@@ -142,14 +142,15 @@ export function mount(host: HTMLElement, onPoint: (p: Point | null) => void = ()
   /* Rescales marks carrying `userData.px` to that many screen pixels. */
   const world = new THREE.Vector3();
   function sizeMarks(): void {
-    if (!marked) return;
     const h = renderer.domElement.clientHeight || 1;
     const perPixel = (2 * Math.tan((camera.fov * Math.PI) / 360)) / h;
-    marked.traverse((o: THREE.Object3D) => {
-      const px = o.userData.px as number | undefined;
-      if (!px) return;
-      o.scale.setScalar(px * perPixel * camera.position.distanceTo(o.getWorldPosition(world)));
-    });
+    for (const g of [marked, still]) {
+      g?.traverse((o: THREE.Object3D) => {
+        const px = o.userData.px as number | undefined;
+        if (!px) return;
+        o.scale.setScalar(px * perPixel * camera.position.distanceTo(o.getWorldPosition(world)));
+      });
+    }
   }
   function sizeCursor(): void {
     if (!cursor.visible) return;
@@ -199,10 +200,24 @@ export function mount(host: HTMLElement, onPoint: (p: Point | null) => void = ()
   /* Rebuilt only when `m.ground` is a different object; an answer is replaced whole, never edited. */
   let region: THREE.Group | null = null;
   let regionOf: GroundMark | null = null;
+  /* The target, its facing and the bounds change only with the question, and a List target is
+     hundreds of marks, so they are kept apart from the route a running search redraws per report. */
+  let still: THREE.Group | null = null;
+  let stillKey = '';
+  let stillGround: GroundMark | null = null;
   function marks(m: Marks): void {
     asked = m;
+    const key = JSON.stringify([m.target, m.facing, m.bounds]);
+    if (!still || key !== stillKey || m.ground !== stillGround) {
+      if (still) { scene.remove(still); release(still); }
+      still = build({...m, link: null, route: null, sword: null, actors: null},
+                    roomBox, groundAt, floorTris);
+      scene.add(still);
+      stillKey = key;
+      stillGround = m.ground;
+    }
     if (marked) { scene.remove(marked); release(marked); }
-    marked = build(m, roomBox, groundAt, floorTris);
+    marked = build({...m, target: null, facing: null, bounds: null}, roomBox, groundAt, floorTris);
     scene.add(marked);
     if (m.ground !== regionOf) {
       if (region) { scene.remove(region); release(region); region = null; }
@@ -273,6 +288,8 @@ export function mount(host: HTMLElement, onPoint: (p: Point | null) => void = ()
     const box = new THREE.Box3().setFromObject(group);
     roomBox = box.clone();
     floorTris = all.ground;
+    /* A new floor moves every mark, kept ones too. */
+    stillKey = '';
     if (asked) marks(asked);
     box.getCenter(orbit.target);
     orbit.dist = box.getSize(new THREE.Vector3()).length() * 0.75;
@@ -533,6 +550,7 @@ export function mount(host: HTMLElement, onPoint: (p: Point | null) => void = ()
         if (m.geometry) m.geometry.dispose();
       });
       if (marked) { scene.remove(marked); release(marked); marked = null; }
+      if (still) { scene.remove(still); release(still); still = null; }
       if (region) { scene.remove(region); release(region); region = null; }
       scene.remove(cursor);
       release(cursor);
